@@ -27,8 +27,10 @@ public final class LoopbackListener: @unchecked Sendable {
 
     public init() {}
 
-    public func start() throws -> Int {
+    public func start(expectedState: String? = nil) throws -> Int {
+        self.expectedState = expectedState
         let params = NWParameters.tcp
+        params.requiredInterfaceType = .loopback
         let listener = try NWListener(using: params, on: .any)
         self.listener = listener
 
@@ -78,11 +80,13 @@ public final class LoopbackListener: @unchecked Sendable {
         return boundPort
     }
 
-    public func waitForCallback(expectedState: String, timeoutSeconds: TimeInterval = 120) async throws -> [String: String] {
+    public func waitForCallback(expectedState: String? = nil, timeoutSeconds: TimeInterval = 120) async throws -> [String: String] {
         guard self.listener != nil else {
             throw LoopbackListenerError.serverCreationFailed
         }
-        self.expectedState = expectedState
+        if let expectedState = expectedState {
+            self.expectedState = expectedState
+        }
 
         return try await withCheckedThrowingContinuation { cont in
             self.continuation = cont

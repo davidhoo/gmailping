@@ -54,6 +54,11 @@ public actor AccountStorage {
         return directory.accounts.contains(where: { $0.id == accountId && !$0.isPendingCleanup })
     }
 
+    public func getActiveAccount(byGoogleSub sub: String) throws -> Account? {
+        let directory = try loadDirectory()
+        return directory.accounts.first(where: { $0.googleSub == sub && !$0.isPendingCleanup })
+    }
+
     public func addOrUpdateAccount(
         googleSub: String,
         email: String,

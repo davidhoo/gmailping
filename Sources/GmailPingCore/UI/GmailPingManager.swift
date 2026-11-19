@@ -60,7 +60,9 @@ public final class GmailPingManager: @unchecked Sendable {
     }
 
     public func start(isSystemLoginStartup: Bool = false) async {
-        try? await accountStorage.cleanupOrphans(keychain: keychainStorage)
+        let prefs = preferencesStorage.loadPreferences()
+        try? loginItemManager.syncWithPreferences(launchAtLogin: prefs.launchAtLogin)
+        try? await accountStorage.cleanupOrphans(keychain: keychainStorage, notificationService: notificationService)
         scheduler.start(isSystemLoginStartup: isSystemLoginStartup)
         await notifyStateChanged()
     }
@@ -139,7 +141,7 @@ public final class GmailPingManager: @unchecked Sendable {
     }
 
     public func checkAllNow() async {
-        await scheduler.checkAll()
+        await scheduler.checkAll(isManualTrigger: true)
         await notifyStateChanged()
     }
 

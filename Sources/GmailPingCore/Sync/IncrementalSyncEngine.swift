@@ -83,6 +83,14 @@ public actor IncrementalSyncEngine {
         }
     }
 
+    public func markReauthorized(accountId: UUID) async throws {
+        var snapshot = (try? await accountStorage.loadSnapshot(for: accountId)) ?? AccountSnapshot(accountId: accountId)
+        snapshot.needsReauth = false
+        snapshot.lastErrorReason = nil
+        try await accountStorage.saveSnapshot(snapshot)
+        clearBackoff(accountId: accountId, forceServerRateLimit: true)
+    }
+
     // MARK: - Main Sync Entry
 
     @discardableResult

@@ -262,6 +262,44 @@ final class AcceptanceTests_Scenarios07_12: XCTestCase {
         let itemA = state.accountItems.first(where: { $0.account.id == accountA.id })
         XCTAssertTrue(itemA?.lastSyncString.contains("待重新授权") == true, "菜单项应显示待重新授权")
         XCTAssertTrue(itemA?.lastSyncString.contains("上次成功") == true, "菜单项应同时保留旧数据成功时间")
+
+        // Reauthorize A with valid credentials matching sub_A
+        env.browserLauncher.autoCallback = true
+        env.oauthClient.exchangeResult = .success(TokenExchangeResult(
+            accessToken: "new_token_A",
+            refreshToken: "new_refresh_A",
+            expiresAt: Date().addingTimeInterval(3600),
+            googleSub: "sub_A",
+            emailFromIdToken: "a@example.com"
+        ))
+        // Account A continues from original historyId 100
+        await env.gmailClient.setHistoryResponse(
+            startHistoryId: "100",
+            result: .success(GmailHistoryListResponse(history: [], historyId: "115"))
+        )
+        await env.gmailClient.setInboxLabelResult(.success(GmailLabel(id: "INBOX", name: "INBOX", messagesUnread: 4)))
+
+        let coordinator = OAuthFlowCoordinator(
+            oauthClient: env.oauthClient,
+            gmailClient: env.gmailClient,
+            keychainStorage: env.keychainStorage,
+            accountStorage: env.accountStorage,
+            browserLauncher: env.browserLauncher,
+            syncEngine: env.syncEngine
+        )
+        try await coordinator.reauthAccountFlow(account: accountA)
+
+        // Verify reauth succeeded, needsReauth cleared, and unread count updated from original cursor
+        let snapAAfterReauth = try await env.accountStorage.loadSnapshot(for: accountA.id)
+        XCTAssertFalse(snapAAfterReauth?.needsReauth == true, "重新授权成功后 needsReauth 应恢复为 false")
+        XCTAssertEqual(snapAAfterReauth?.unreadCount, 4, "从未读 3 恢复并更新为 4")
+        XCTAssertEqual(snapAAfterReauth?.historyId, "115", "从原游标 100 成功推进至 115")
+
+        // Verify automatic check is no longer blocked for A
+        let callCountBefore = await env.gmailClient.listHistoryCallCount
+        await env.manager.scheduler.checkAll(isManualTrigger: false)
+        let callCountAfter = await env.gmailClient.listHistoryCallCount
+        XCTAssertGreaterThan(callCountAfter, callCountBefore, "重新授权后自动检查应恢复正常请求")
     }
 
     // MARK: - 场景 11: 移除默认账号时迟到结果废弃，默认目标转移

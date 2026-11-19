@@ -9,6 +9,7 @@ public final class PreferencesViewModel: ObservableObject {
     @Published public var isAddingAccount: Bool = false
     @Published public var errorMessage: String?
     @Published public var loginItemStatus: LoginItemStatus = .notRegistered
+    @Published public var notificationAuthStatus: NotificationAuthStatus = .notDetermined
 
     private let manager: GmailPingManager
     private let coordinator: OAuthFlowCoordinator
@@ -35,6 +36,8 @@ public final class PreferencesViewModel: ObservableObject {
             self.defaultAccountId = dir.defaultAccountId
             self.preferences = manager.preferencesStorage.loadPreferences()
             self.loginItemStatus = manager.loginItemManager.status
+            let notifStatus = await manager.notificationService.getAuthorizationStatus()
+            self.notificationAuthStatus = notifStatus
 
             var snaps: [UUID: AccountSnapshot] = [:]
             for acc in self.accounts {
@@ -77,13 +80,13 @@ public final class PreferencesViewModel: ObservableObject {
         isAddingAccount = true
         errorMessage = nil
         Task {
-            // "首个账号由用户连接后说明通知用途并调用系统授权。"
-            if self.accounts.isEmpty {
-                _ = await manager.notificationService.requestAuthorization()
-            }
-
+            let wasEmpty = self.accounts.isEmpty
             do {
                 _ = try await coordinator.addAccountFlow()
+                // "首个账号由用户连接后说明通知用途并调用系统授权。"
+                if wasEmpty {
+                    _ = await manager.notificationService.requestAuthorization()
+                }
                 await MainActor.run {
                     self.isAddingAccount = false
                     self.refresh()
@@ -159,7 +162,7 @@ public struct PreferencesView: View {
             Section("系统启动") {
                 VStack(alignment: .leading, spacing: 6) {
                     Toggle("登录时自动启动 GmailPing", isOn: Binding(
-                        get: { viewModel.preferences.launchAtLogin },
+                        get: { viewModel.loginItemStatus == .enabled },
                         set: { val in
                             var p = viewModel.preferences
                             p.launchAtLogin = val
@@ -174,7 +177,7 @@ public struct PreferencesView: View {
                         Text(viewModel.loginItemStatus.rawValue)
                             .font(.caption)
                             .fontWeight(.medium)
-                            .foregroundColor(viewModel.loginItemStatus == .enabled ? .primary : .orange)
+                            .foregroundColor(viewModel.loginItemStatus == .enabled ? .primary : (viewModel.loginItemStatus == .requiresApproval ? .orange : .secondary))
 
                         Spacer()
 
@@ -185,6 +188,12 @@ public struct PreferencesView: View {
                         }
                         .buttonStyle(.borderless)
                         .font(.caption)
+                    }
+
+                    if viewModel.loginItemStatus == .requiresApproval {
+                        Text("⚠️ 待系统批准：已在系统登记，需在「系统设置 > 通用 > 登录项」中允许 GmailPing 自启动。")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
                     }
                 }
             }
@@ -255,8 +264,17 @@ public struct PreferencesView: View {
                         }
                     ))
 
-                    HStack {
+                    HStack(spacing: 4) {
+                        Text("系统通知权限:")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text(viewModel.notificationAuthStatus.rawValue)
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundColor(viewModel.notificationAuthStatus == .authorized ? .primary : .orange)
+
                         Spacer()
+
                         Button("打开系统通知设置...") {
                             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") {
                                 NSWorkspace.shared.open(url)

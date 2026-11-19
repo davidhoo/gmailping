@@ -12,10 +12,23 @@ public protocol LoginItemManagerProtocol: Sendable {
     var status: LoginItemStatus { get }
     var isEnabled: Bool { get }
     func setEnabled(_ enabled: Bool) throws
+    func syncWithPreferences(launchAtLogin: Bool) throws
 }
 
 public final class LoginItemManager: LoginItemManagerProtocol, @unchecked Sendable {
     public init() {}
+
+    public static func detectIsSystemLoginLaunch(event: NSAppleEventDescriptor? = nil) -> Bool {
+        let currentEvent = event ?? NSAppleEventManager.shared().currentAppleEvent
+        guard let currentEvent = currentEvent else { return false }
+        if let prop = currentEvent.paramDescriptor(forKeyword: keyAEPropData) {
+            let enumCode = prop.enumCodeValue
+            if enumCode == 0x6c676974 /* 'lgit' (keyAELaunchedAsLogInItem) */ {
+                return true
+            }
+        }
+        return false
+    }
 
     public var status: LoginItemStatus {
         if #available(macOS 13.0, *) {
@@ -51,6 +64,14 @@ public final class LoginItemManager: LoginItemManagerProtocol, @unchecked Sendab
             }
         }
     }
+
+    public func syncWithPreferences(launchAtLogin: Bool) throws {
+        if launchAtLogin && status == .notRegistered {
+            try setEnabled(true)
+        } else if !launchAtLogin && status == .enabled {
+            try setEnabled(false)
+        }
+    }
 }
 
 public final class MockLoginItemManager: LoginItemManagerProtocol, @unchecked Sendable {
@@ -81,5 +102,15 @@ public final class MockLoginItemManager: LoginItemManagerProtocol, @unchecked Se
         lock.lock()
         defer { lock.unlock() }
         mockStatus = enabled ? .enabled : .notRegistered
+    }
+
+    public func syncWithPreferences(launchAtLogin: Bool) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        if launchAtLogin && mockStatus == .notRegistered {
+            mockStatus = .enabled
+        } else if !launchAtLogin && mockStatus == .enabled {
+            mockStatus = .notRegistered
+        }
     }
 }

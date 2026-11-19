@@ -216,7 +216,7 @@ public final class GoogleOAuthClient: GoogleOAuthClientProtocol, @unchecked Send
 
         // Check required scope
         let requiredScope = "https://www.googleapis.com/auth/gmail.metadata"
-        if !scopeString.isEmpty && !grantedScopes.contains(requiredScope) && !grantedScopes.contains("https://mail.google.com/") {
+        if scopeString.isEmpty || !grantedScopes.contains(requiredScope) {
             throw OAuthError.insufficientScopes(missing: [requiredScope])
         }
 
@@ -297,39 +297,75 @@ public final class GoogleOAuthClient: GoogleOAuthClientProtocol, @unchecked Send
             throw OAuthError.invalidIDToken(reason: "JWT 结构不合法，非三段式")
         }
 
-        var base64 = parts[1]
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        while base64.count % 4 != 0 {
-            base64.append("=")
+        func decodeBase64URL(_ str: String) -> Data? {
+            var base64 = str
+                .replacingOccurrences(of: "-", with: "+")
+                .replacingOccurrences(of: "_", with: "/")
+            while base64.count % 4 != 0 {
+                base64.append("=")
+            }
+            return Data(base64Encoded: base64)
         }
 
-        guard let data = Data(base64Encoded: base64),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let sub = json["sub"] as? String else {
+        // 1. Header validation
+        guard let headerData = decodeBase64URL(parts[0]),
+              let headerJson = try? JSONSerialization.jsonObject(with: headerData) as? [String: Any],
+              let alg = headerJson["alg"] as? String else {
+            throw OAuthError.invalidIDToken(reason: "JWT Header 解析失败或缺少算法声明")
+        }
+
+        // Reject 'none' algorithm
+        guard alg != "none" && !alg.isEmpty else {
+            throw OAuthError.invalidIDToken(reason: "拒绝不安全的 'none' 算法")
+        }
+
+        // 2. Signature presence validation
+        guard let signatureData = decodeBase64URL(parts[2]), !signatureData.isEmpty else {
+            throw OAuthError.invalidIDToken(reason: "JWT 签名缺失或无效")
+        }
+
+        // 3. Payload validation
+        guard let payloadData = decodeBase64URL(parts[1]),
+              let json = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any] else {
+            throw OAuthError.invalidIDToken(reason: "JWT Payload 解析失败")
+        }
+
+        // Sub validation
+        guard let sub = json["sub"] as? String, !sub.isEmpty else {
             throw OAuthError.invalidIDToken(reason: "缺少必填的 sub 身份标识")
         }
 
         // Issuer validation
-        if let iss = json["iss"] as? String {
-            let validIssuers = ["https://accounts.google.com", "accounts.google.com"]
-            guard validIssuers.contains(iss) else {
-                throw OAuthError.invalidIDToken(reason: "发行方无效: \(iss)")
-            }
-        } else {
+        guard let iss = json["iss"] as? String else {
             throw OAuthError.invalidIDToken(reason: "缺少发行方 iss")
         }
+        let validIssuers = ["https://accounts.google.com", "accounts.google.com"]
+        guard validIssuers.contains(iss) else {
+            throw OAuthError.invalidIDToken(reason: "发行方无效: \(iss)")
+        }
 
-        // Expiration validation
-        if let exp = json["exp"] as? TimeInterval {
-            guard exp > Date().timeIntervalSince1970 else {
-                throw OAuthError.invalidIDToken(reason: "ID Token 已过期")
-            }
+        // Audience validation (must match configured client ID)
+        guard let aud = json["aud"] as? String, !aud.isEmpty else {
+            throw OAuthError.invalidIDToken(reason: "缺少受众 aud")
+        }
+        guard aud == self.clientId else {
+            throw OAuthError.invalidIDToken(reason: "受众 aud (\(aud)) 与客户端 ID (\(self.clientId)) 不匹配")
+        }
+
+        // Expiration validation (must exist and not be expired)
+        guard let exp = json["exp"] as? TimeInterval else {
+            throw OAuthError.invalidIDToken(reason: "缺少过期时间 exp")
+        }
+        guard exp > Date().timeIntervalSince1970 else {
+            throw OAuthError.invalidIDToken(reason: "ID Token 已过期")
         }
 
         // Nonce validation
         if let expectedNonce = expectedNonce {
-            guard let tokenNonce = json["nonce"] as? String, tokenNonce == expectedNonce else {
+            guard let tokenNonce = json["nonce"] as? String, !tokenNonce.isEmpty else {
+                throw OAuthError.invalidIDToken(reason: "缺少必填的 nonce 声明")
+            }
+            guard tokenNonce == expectedNonce else {
                 throw OAuthError.nonceMismatch
             }
         }

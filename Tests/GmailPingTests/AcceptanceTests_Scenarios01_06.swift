@@ -55,15 +55,53 @@ final class AcceptanceTests_Scenarios01_06: XCTestCase {
 
     // MARK: - 场景 02: 重复添加、取消、重新授权时选错账号
     func testScenario02_DuplicateAdd_ReauthSubMismatch() async throws {
-        // Add A
-        let (accountA, isNewA) = try await env.accountStorage.addOrUpdateAccount(googleSub: "sub_A", email: "a@example.com")
-        XCTAssertTrue(isNewA)
+        env.browserLauncher.autoCallback = true
+        env.oauthClient.exchangeResult = .success(TokenExchangeResult(
+            accessToken: "token_A1",
+            refreshToken: "refresh_A1",
+            expiresAt: Date().addingTimeInterval(3600),
+            googleSub: "sub_A",
+            emailFromIdToken: "a@example.com"
+        ))
+        await env.gmailClient.setProfileResult(.success(GmailProfile(emailAddress: "a@example.com", historyId: "100")))
+        await env.gmailClient.setInboxLabelResult(.success(GmailLabel(id: "INBOX", name: "INBOX", messagesUnread: 2)))
 
-        // Duplicate add A -> updates existing, does not duplicate row
-        let (accountA2, isNewA2) = try await env.accountStorage.addOrUpdateAccount(googleSub: "sub_A", email: "a_new@example.com")
-        XCTAssertFalse(isNewA2)
-        XCTAssertEqual(accountA.id, accountA2.id)
+        let coordinator = OAuthFlowCoordinator(
+            oauthClient: env.oauthClient,
+            gmailClient: env.gmailClient,
+            keychainStorage: env.keychainStorage,
+            accountStorage: env.accountStorage,
+            browserLauncher: env.browserLauncher,
+            syncEngine: env.syncEngine
+        )
+
+        // Add A
+        let accountA = try await coordinator.addAccountFlow()
+        XCTAssertEqual(accountA.email, "a@example.com")
+        var storedIds = try env.keychainStorage.allStoredAccountIds()
+        XCTAssertEqual(storedIds.count, 1)
+        XCTAssertTrue(storedIds.contains(accountA.id))
+
+        // Repeated add of same Google identity (sub_A) via addAccountFlow
+        env.oauthClient.exchangeResult = .success(TokenExchangeResult(
+            accessToken: "token_A2",
+            refreshToken: "refresh_A2",
+            expiresAt: Date().addingTimeInterval(3600),
+            googleSub: "sub_A",
+            emailFromIdToken: "a_new@example.com"
+        ))
+        await env.gmailClient.setProfileResult(.success(GmailProfile(emailAddress: "a_new@example.com", historyId: "100")))
+
+        let accountA2 = try await coordinator.addAccountFlow()
+        XCTAssertEqual(accountA.id, accountA2.id, "重复添加应复用并更新原账号实例")
         XCTAssertEqual(accountA2.email, "a_new@example.com")
+
+        // Crucial check: Keychain must NOT create a new orphan UUID, must update accountA.id!
+        storedIds = try env.keychainStorage.allStoredAccountIds()
+        XCTAssertEqual(storedIds.count, 1, "钥匙串不应残留孤立 UUID，只应有 1 个")
+        XCTAssertTrue(storedIds.contains(accountA.id))
+        let updatedToken = try env.keychainStorage.getToken(for: accountA.id)
+        XCTAssertEqual(updatedToken?.refreshToken, "refresh_A2", "原账号钥匙串凭据应被成功更新")
 
         let directory = try await env.accountStorage.loadDirectory()
         XCTAssertEqual(directory.accounts.count, 1)
@@ -76,7 +114,6 @@ final class AcceptanceTests_Scenarios01_06: XCTestCase {
 
         // Reauth A but user picks B's Google credentials (sub_B)
         // Verify real reauthAccountFlow throws subMismatch and B's state unaffected
-        env.browserLauncher.autoCallback = true
         env.oauthClient.exchangeResult = .success(TokenExchangeResult(
             accessToken: "wrong_token",
             refreshToken: "wrong_refresh",
@@ -85,22 +122,13 @@ final class AcceptanceTests_Scenarios01_06: XCTestCase {
             emailFromIdToken: "b@example.com"
         ))
 
-        let coordinator = OAuthFlowCoordinator(
-            oauthClient: env.oauthClient,
-            gmailClient: env.gmailClient,
-            keychainStorage: env.keychainStorage,
-            accountStorage: env.accountStorage,
-            browserLauncher: env.browserLauncher,
-            syncEngine: env.syncEngine
-        )
-
         do {
-            try await coordinator.reauthAccountFlow(account: accountA)
+            try await coordinator.reauthAccountFlow(account: accountA2)
             XCTFail("Should have thrown subMismatch")
         } catch let OAuthError.subMismatch(expected, actual, email) {
             XCTAssertEqual(expected, "sub_A")
             XCTAssertEqual(actual, "sub_B")
-            XCTAssertEqual(email, "a@example.com")
+            XCTAssertEqual(email, "a_new@example.com")
         }
 
         // B's snapshot and count are preserved

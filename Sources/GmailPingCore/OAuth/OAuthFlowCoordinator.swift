@@ -41,13 +41,13 @@ public actor OAuthFlowCoordinator {
             }
         }
 
-        let port = try listener.start()
-        let redirectURI = "http://127.0.0.1:\(port)"
-
         let state = PKCE.generateRandomString(length: 32)
         let nonce = PKCE.generateRandomString(length: 32)
         let codeVerifier = PKCE.generateCodeVerifier()
         let codeChallenge = PKCE.generateCodeChallenge(from: codeVerifier)
+
+        let port = try listener.start(expectedState: state)
+        let redirectURI = "http://127.0.0.1:\(port)"
 
         guard let authURL = oauthClient.buildAuthorizationURL(
             state: state,
@@ -83,28 +83,41 @@ public actor OAuthFlowCoordinator {
         let profile = try await gmailClient.getProfile(accessToken: tokenResult.accessToken)
         let email = profile.emailAddress
 
+        // Check if an active account with this googleSub already exists
+        let existingAccount = try await accountStorage.getActiveAccount(byGoogleSub: tokenResult.googleSub)
+        let targetAccountId = existingAccount?.id ?? UUID()
+
         // Order: First save credentials to Keychain, then publish account record
-        let newAccountId = UUID()
         let token = OAuthToken(
-            accountId: newAccountId,
+            accountId: targetAccountId,
             accessToken: tokenResult.accessToken,
             refreshToken: refreshToken,
             expiresAt: tokenResult.expiresAt
         )
         try keychainStorage.saveToken(token)
 
-        let (account, _) = try await accountStorage.addOrUpdateAccount(
+        let (account, isNew) = try await accountStorage.addOrUpdateAccount(
             googleSub: tokenResult.googleSub,
             email: email,
-            explicitId: newAccountId
+            explicitId: targetAccountId
         )
 
-        // Establish silent baseline
-        _ = try await syncEngine.buildBaseline(
-            account: account,
-            accessToken: tokenResult.accessToken,
-            isSystemLoginStartup: false
-        )
+        try await syncEngine.markReauthorized(accountId: account.id)
+
+        if isNew {
+            // Establish silent baseline for new account
+            _ = try await syncEngine.buildBaseline(
+                account: account,
+                accessToken: tokenResult.accessToken,
+                isSystemLoginStartup: false
+            )
+        } else {
+            // Re-adding existing active account: refresh sync from current state
+            let syncResult = await syncEngine.syncAccount(accountId: account.id, isManualTrigger: true)
+            if case .failure(let err) = syncResult {
+                throw err
+            }
+        }
 
         return account
     }
@@ -119,13 +132,13 @@ public actor OAuthFlowCoordinator {
             }
         }
 
-        let port = try listener.start()
-        let redirectURI = "http://127.0.0.1:\(port)"
-
         let state = PKCE.generateRandomString(length: 32)
         let nonce = PKCE.generateRandomString(length: 32)
         let codeVerifier = PKCE.generateCodeVerifier()
         let codeChallenge = PKCE.generateCodeChallenge(from: codeVerifier)
+
+        let port = try listener.start(expectedState: state)
+        let redirectURI = "http://127.0.0.1:\(port)"
 
         guard let authURL = oauthClient.buildAuthorizationURL(
             state: state,
@@ -177,7 +190,10 @@ public actor OAuthFlowCoordinator {
         )
         try keychainStorage.saveToken(token)
 
-        await syncEngine.clearBackoff(accountId: updatedAcc.id)
-        _ = await syncEngine.syncAccount(accountId: updatedAcc.id)
+        try await syncEngine.markReauthorized(accountId: updatedAcc.id)
+        let syncResult = await syncEngine.syncAccount(accountId: updatedAcc.id, isManualTrigger: true)
+        if case .failure(let error) = syncResult {
+            throw error
+        }
     }
 }

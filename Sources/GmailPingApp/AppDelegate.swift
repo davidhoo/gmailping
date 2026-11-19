@@ -7,18 +7,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Send
     private var menuBarController: MenuBarController!
     private var preferencesWindow: NSWindow?
 
-    public static func detectIsSystemLoginLaunch() -> Bool {
-        if CommandLine.arguments.contains("--login-item") {
-            return true
-        }
-        if let event = NSAppleEventManager.shared().currentAppleEvent,
-           let prop = event.attributeDescriptor(forKeyword: keyAEPropData) {
-            let fourCC = prop.typeCodeValue
-            if fourCC == 0x6c6f6769 /* 'logi' */ || fourCC == 0x6c6f676e /* 'logn' */ {
-                return true
-            }
-        }
-        return false
+    public static func detectIsSystemLoginLaunch(event: NSAppleEventDescriptor? = nil) -> Bool {
+        return LoginItemManager.detectIsSystemLoginLaunch(event: event)
     }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {

@@ -1,8 +1,15 @@
 import Foundation
 import UserNotifications
 
+public enum NotificationAuthStatus: String, Sendable {
+    case authorized = "已允许"
+    case denied = "已拒绝"
+    case notDetermined = "尚未决定"
+}
+
 public protocol NotificationServiceProtocol: Sendable {
     func requestAuthorization() async -> Bool
+    func getAuthorizationStatus() async -> NotificationAuthStatus
     func deliverBatch(
         _ batch: NotificationBatch,
         playSound: Bool
@@ -37,6 +44,20 @@ public final class NotificationService: NSObject, NotificationServiceProtocol, U
             return granted
         } catch {
             return false
+        }
+    }
+
+    public func getAuthorizationStatus() async -> NotificationAuthStatus {
+        let settings = await center.notificationSettings()
+        switch settings.authorizationStatus {
+        case .authorized, .provisional:
+            return .authorized
+        case .denied:
+            return .denied
+        case .notDetermined:
+            return .notDetermined
+        @unknown default:
+            return .notDetermined
         }
     }
 
@@ -160,16 +181,27 @@ public actor MockNotificationService: NotificationServiceProtocol {
     public private(set) var deliveredBatches: [NotificationBatch] = []
     public private(set) var deliveredSummaries: [(accountId: UUID, email: String, count: Int)] = []
     public var authorizationGranted: Bool = true
+    public var authStatus: NotificationAuthStatus = .authorized
     public private(set) var clearedAccounts: [UUID] = []
 
     public init() {}
 
     public func setAuthorizationGranted(_ granted: Bool) {
         self.authorizationGranted = granted
+        self.authStatus = granted ? .authorized : .denied
+    }
+
+    public func setAuthStatus(_ status: NotificationAuthStatus) {
+        self.authStatus = status
+        self.authorizationGranted = (status == .authorized)
     }
 
     public func requestAuthorization() async -> Bool {
         return authorizationGranted
+    }
+
+    public func getAuthorizationStatus() async -> NotificationAuthStatus {
+        return authStatus
     }
 
     public func deliverBatch(

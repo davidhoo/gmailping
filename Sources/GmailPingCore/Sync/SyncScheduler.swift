@@ -90,63 +90,94 @@ public final class SyncScheduler: @unchecked Sendable {
         let (sleeping, online) = getSystemState()
         guard !sleeping && online else { return }
 
-        let directory = (try? await accountStorage.loadDirectory()) ?? AccountDirectory()
-        let activeAccounts = directory.accounts.filter { !$0.isPendingCleanup }
+        let syncTask = Task { [weak self] in
+            guard let self = self else { return }
+            let directory = (try? await self.accountStorage.loadDirectory()) ?? AccountDirectory()
+            let activeAccounts = directory.accounts.filter { !$0.isPendingCleanup }
 
-        // Filter accounts by readiness
-        var accountsToSync: [Account] = []
-        for account in activeAccounts {
-            let (ready, _) = await syncEngine.isReadyForSync(
-                accountId: account.id,
-                isManualTrigger: isManualTrigger
-            )
-            if ready {
-                accountsToSync.append(account)
-            }
-        }
-
-        guard !accountsToSync.isEmpty else {
-            onSyncCompleted?()
-            return
-        }
-
-        // Global concurrency = 2, staggered polling
-        await withTaskGroup(of: Void.self) { group in
-            var activeWorkers = 0
-
-            for (index, account) in accountsToSync.enumerated() {
+            // Filter accounts by readiness
+            var accountsToSync: [Account] = []
+            for account in activeAccounts {
                 if Task.isCancelled { break }
-
-                if activeWorkers >= 2 {
-                    _ = await group.next()
-                    activeWorkers -= 1
+                let (ready, _) = await self.syncEngine.isReadyForSync(
+                    accountId: account.id,
+                    isManualTrigger: isManualTrigger
+                )
+                if ready {
+                    accountsToSync.append(account)
                 }
+            }
 
-                // Stagger requests slightly (100ms) between starting different accounts
-                if index > 0 {
-                    try? await Task.sleep(nanoseconds: 100_000_000)
-                }
+            guard !accountsToSync.isEmpty, !Task.isCancelled else {
+                return
+            }
 
-                activeWorkers += 1
-                group.addTask {
-                    _ = await self.syncEngine.syncAccount(
-                        accountId: account.id,
-                        isSystemLoginStartup: isSystemLoginStartup,
-                        isManualTrigger: isManualTrigger
-                    )
+            // Global concurrency = 2, staggered polling
+            await withTaskGroup(of: Void.self) { group in
+                var activeWorkers = 0
+
+                for (index, account) in accountsToSync.enumerated() {
+                    if Task.isCancelled { break }
+
+                    if activeWorkers >= 2 {
+                        _ = await group.next()
+                        activeWorkers -= 1
+                    }
+
+                    // Stagger requests slightly (100ms) between starting different accounts
+                    if index > 0 {
+                        try? await Task.sleep(nanoseconds: 100_000_000)
+                    }
+
+                    if Task.isCancelled { break }
+
+                    activeWorkers += 1
+                    group.addTask {
+                        _ = await self.syncEngine.syncAccount(
+                            accountId: account.id,
+                            isSystemLoginStartup: isSystemLoginStartup,
+                            isManualTrigger: isManualTrigger
+                        )
+                    }
                 }
             }
         }
+
+        setActiveSyncTask(syncTask)
+        await syncTask.value
+        clearActiveSyncTask(ifEquals: syncTask)
 
         onSyncCompleted?()
     }
 
     public func checkSingleAccount(accountId: UUID) async {
-        let (ready, _) = await syncEngine.isReadyForSync(accountId: accountId, isManualTrigger: true)
-        if ready {
-            _ = await syncEngine.syncAccount(accountId: accountId, isManualTrigger: true)
+        let singleTask = Task { [weak self] in
+            guard let self = self else { return }
+            let (ready, _) = await self.syncEngine.isReadyForSync(accountId: accountId, isManualTrigger: true)
+            if ready && !Task.isCancelled {
+                _ = await self.syncEngine.syncAccount(accountId: accountId, isManualTrigger: true)
+            }
         }
+
+        setActiveSyncTask(singleTask)
+        await singleTask.value
+        clearActiveSyncTask(ifEquals: singleTask)
+
         onSyncCompleted?()
+    }
+
+    private func setActiveSyncTask(_ task: Task<Void, Never>?) {
+        lock.lock()
+        activeSyncTask = task
+        lock.unlock()
+    }
+
+    private func clearActiveSyncTask(ifEquals task: Task<Void, Never>) {
+        lock.lock()
+        if activeSyncTask == task {
+            activeSyncTask = nil
+        }
+        lock.unlock()
     }
 
     // MARK: - Network & Sleep Handlers
