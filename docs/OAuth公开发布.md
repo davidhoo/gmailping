@@ -2,9 +2,9 @@
 
 ## 当前发布状态
 
-截至 2026-11-19 17:38（北京时间），公开仓库、GitHub Pages 首页和隐私政策均已上线。Google Cloud 项目 `gmailping` 的 Gmail API 已启用，受众为 External，发布状态为「正式版」。同意页配置的品牌名为 GmailPing，授权网域为 `davidhoo.github.io`，数据范围为 `openid` 和 `gmail.metadata`。
+截至 2026-11-19 17:50（北京时间），公开仓库、GitHub Pages 首页和隐私政策均已上线。Google Cloud 项目 `gmailping` 的 Gmail API 已启用，受众为 External，发布状态为「正式版」。同意页配置的品牌名为 GmailPing，授权网域为 `davidhoo.github.io`，数据范围为 `openid` 和 `gmail.metadata`。
 
-Search Console 已通过 HTML 文件验证项目首页的 URL 前缀所有权。随后的 Google 品牌验证仍报首页未登记到发布者名下，控制台要求等待 24 小时让所有权信息同步，再从品牌页重新验证。保留站点验证文件。品牌验证通过后还需点击发布品牌，之后提交数据访问审核。当前 DMG 是本机临时签名的预览包。
+Search Console 已分别确认项目首页和根站点 `https://davidhoo.github.io/` 的 URL 前缀所有权。根目录的 Google HTML 验证文件由独立的 GitHub Pages 仓库发布，应持续保留。根站点验证完成后已重试品牌验证，Google 仍提示首页未登记到发布者名下，并要求等待 24 小时同步。建议北京时间 2026-11-20 17:50 后重试；若仍是同一提示，使用控制台的额外审核入口并提供根站点和项目首页的所有权验证结果。品牌通过后需发布品牌，再提交数据访问审核。当前 DMG 是本机临时签名的预览包。
 
 [产品首页](https://davidhoo.github.io/gmailping/) · [隐私政策](https://davidhoo.github.io/gmailping/privacy/) · [品牌页](https://console.cloud.google.com/auth/branding?project=gmailping) · [验证中心](https://console.cloud.google.com/auth/verification?project=gmailping)
 
