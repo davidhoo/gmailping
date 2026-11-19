@@ -2,6 +2,8 @@ import Foundation
 import Security
 
 public enum OAuthError: Error, LocalizedError, Equatable {
+    case missingClientConfiguration
+    case invalidClientConfiguration
     case invalidRedirectURI
     case stateMismatch
     case missingCode
@@ -17,6 +19,10 @@ public enum OAuthError: Error, LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
+        case .missingClientConfiguration:
+            return "此版本缺少 Google 登录配置。请联系 GmailPing 发布者获取已配置的版本。"
+        case .invalidClientConfiguration:
+            return "Google 登录配置无效。请联系 GmailPing 发布者。"
         case .invalidRedirectURI:
             return "无效的重定向地址"
         case .stateMismatch:
@@ -74,6 +80,7 @@ public struct TokenExchangeResult: Sendable {
 }
 
 public protocol GoogleOAuthClientProtocol: Sendable {
+    func validateConfiguration() throws
     func buildAuthorizationURL(
         state: String,
         nonce: String,
@@ -94,24 +101,22 @@ public protocol GoogleOAuthClientProtocol: Sendable {
     ) async throws -> (accessToken: String, newRefreshToken: String?, expiresAt: Date)
 }
 
+public extension GoogleOAuthClientProtocol {
+    func validateConfiguration() throws {}
+}
+
 public final class GoogleOAuthClient: GoogleOAuthClientProtocol, @unchecked Sendable {
-    public let clientId: String
-    public let clientSecret: String?
+    private let explicitClientId: String?
+    private let explicitClientSecret: String?
     private let session: URLSession
     public var publicKeyProvider: (@Sendable (String?) async throws -> SecKey?)?
 
-    public static func resolveClientId() -> String {
-        if let envId = ProcessInfo.processInfo.environment["GMAILPING_CLIENT_ID"], !envId.isEmpty {
-            return envId
+    private func configuration() throws -> DesktopOAuthConfiguration {
+        if let explicitClientId {
+            return DesktopOAuthConfiguration(clientId: explicitClientId, clientSecret: explicitClientSecret)
         }
-        let homeDir = FileManager.default.homeDirectoryForCurrentUser
-        let configFile = homeDir.appendingPathComponent(".gmailping/config.json")
-        if let data = try? Data(contentsOf: configFile),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let id = json["client_id"] as? String, !id.isEmpty {
-            return id
-        }
-        return "GMAILPING_CLIENT_ID"
+        let config = try DesktopOAuthConfiguration.load()
+        return DesktopOAuthConfiguration(clientId: config.clientId, clientSecret: explicitClientSecret ?? config.clientSecret)
     }
 
     public init(
@@ -119,9 +124,20 @@ public final class GoogleOAuthClient: GoogleOAuthClientProtocol, @unchecked Send
         clientSecret: String? = nil,
         session: URLSession = .shared
     ) {
-        self.clientId = clientId ?? Self.resolveClientId()
-        self.clientSecret = clientSecret
+        self.explicitClientId = clientId
+        self.explicitClientSecret = clientSecret
         self.session = session
+    }
+
+    public static func resolveClientId() -> String {
+        (try? DesktopOAuthConfiguration.load().clientId) ?? ""
+    }
+
+    public var clientId: String { (try? configuration().clientId) ?? "" }
+    public var clientSecret: String? { try? configuration().clientSecret }
+
+    public func validateConfiguration() throws {
+        _ = try configuration()
     }
 
     public func buildAuthorizationURL(
@@ -131,6 +147,7 @@ public final class GoogleOAuthClient: GoogleOAuthClientProtocol, @unchecked Send
         redirectURI: String,
         loginHint: String? = nil
     ) -> URL? {
+        guard let clientId = try? configuration().clientId else { return nil }
         var components = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth")
         var queryItems: [URLQueryItem] = [
             URLQueryItem(name: "client_id", value: clientId),
@@ -167,14 +184,15 @@ public final class GoogleOAuthClient: GoogleOAuthClientProtocol, @unchecked Send
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
 
+        let config = try configuration()
         var bodyParams: [String: String] = [
             "code": code,
-            "client_id": clientId,
+            "client_id": config.clientId,
             "redirect_uri": redirectURI,
             "grant_type": "authorization_code",
             "code_verifier": codeVerifier
         ]
-        if let clientSecret = clientSecret {
+        if let clientSecret = config.clientSecret {
             bodyParams["client_secret"] = clientSecret
         }
 
@@ -245,12 +263,13 @@ public final class GoogleOAuthClient: GoogleOAuthClientProtocol, @unchecked Send
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
 
+        let config = try configuration()
         var bodyParams: [String: String] = [
             "refresh_token": currentRefreshToken,
-            "client_id": clientId,
+            "client_id": config.clientId,
             "grant_type": "refresh_token"
         ]
-        if let clientSecret = clientSecret {
+        if let clientSecret = config.clientSecret {
             bodyParams["client_secret"] = clientSecret
         }
 
@@ -386,8 +405,9 @@ public final class GoogleOAuthClient: GoogleOAuthClientProtocol, @unchecked Send
         guard let aud = json["aud"] as? String, !aud.isEmpty else {
             throw OAuthError.invalidIDToken(reason: "缺少受众 aud")
         }
-        guard aud == self.clientId else {
-            throw OAuthError.invalidIDToken(reason: "受众 aud (\(aud)) 与客户端 ID (\(self.clientId)) 不匹配")
+        let clientId = try configuration().clientId
+        guard aud == clientId else {
+            throw OAuthError.invalidIDToken(reason: "受众 aud (\(aud)) 与客户端 ID (\(clientId)) 不匹配")
         }
 
         // Expiration validation (must exist and not be expired)

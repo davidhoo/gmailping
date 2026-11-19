@@ -3,3 +3,7 @@
 dist/
 DerivedData/
 *.xcuserstate
+
+# Google Cloud desktop client export (supplied to packaging outside source control)
+client_secret*.json
+GoogleDesktopClient.json

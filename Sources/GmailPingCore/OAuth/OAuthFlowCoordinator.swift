@@ -32,10 +32,12 @@ public actor OAuthFlowCoordinator {
     }
 
     public func addAccountFlow() async throws -> Account {
+        try oauthClient.validateConfiguration()
         let listener = LoopbackListener()
         activeListener = listener
 
         defer {
+            listener.stop()
             if activeListener === listener {
                 activeListener = nil
             }
@@ -56,7 +58,6 @@ public actor OAuthFlowCoordinator {
             redirectURI: redirectURI,
             loginHint: nil
         ) else {
-            listener.stop()
             throw OAuthError.invalidRedirectURI
         }
 
@@ -123,10 +124,12 @@ public actor OAuthFlowCoordinator {
     }
 
     public func reauthAccountFlow(account: Account) async throws {
+        try oauthClient.validateConfiguration()
         let listener = LoopbackListener()
         activeListener = listener
 
         defer {
+            listener.stop()
             if activeListener === listener {
                 activeListener = nil
             }
@@ -147,7 +150,6 @@ public actor OAuthFlowCoordinator {
             redirectURI: redirectURI,
             loginHint: account.email
         ) else {
-            listener.stop()
             throw OAuthError.invalidRedirectURI
         }
 

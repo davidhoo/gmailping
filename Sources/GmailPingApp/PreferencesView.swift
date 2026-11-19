@@ -140,6 +140,7 @@ public final class PreferencesViewModel: ObservableObject {
 
 public struct PreferencesView: View {
     @ObservedObject var viewModel: PreferencesViewModel
+    @State private var setupIssue = DesktopOAuthConfiguration.setupIssue
     @State private var accountToRemove: Account?
     @State private var showingRemoveAlert = false
 
@@ -309,6 +310,10 @@ public struct PreferencesView: View {
 
     private var accountsTab: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if let setupIssue {
+                Text(setupIssue).font(.callout)
+            }
+
             if let errorMsg = viewModel.errorMessage {
                 HStack {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -359,7 +364,7 @@ public struct PreferencesView: View {
                         Text("添加 Google 账号...")
                     }
                 }
-                .disabled(viewModel.isAddingAccount)
+                .disabled(viewModel.isAddingAccount || setupIssue != nil)
 
                 if viewModel.isAddingAccount {
                     ProgressView()
@@ -378,6 +383,7 @@ public struct PreferencesView: View {
                 Spacer()
             }
         }
+        .onAppear { setupIssue = DesktopOAuthConfiguration.setupIssue }
     }
 
     private func accountRow(account: Account) -> some View {
