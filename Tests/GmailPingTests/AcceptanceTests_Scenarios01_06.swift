@@ -164,6 +164,34 @@ final class AcceptanceTests_Scenarios01_06: XCTestCase {
         XCTAssertEqual(env.browserLauncher.openedEmails.last, "work+test@example.com")
     }
 
+    func testScenario03_PrimaryClickFollowsInboxUnreadCounts() async throws {
+        var state = await env.manager.getDisplayState()
+        XCTAssertEqual(state.primaryClickAction, .openPreferences)
+
+        let (a, _) = try await env.accountStorage.addOrUpdateAccount(googleSub: "a", email: "a@example.com")
+        let (b, _) = try await env.accountStorage.addOrUpdateAccount(googleSub: "b", email: "b@example.com")
+        let (c, _) = try await env.accountStorage.addOrUpdateAccount(googleSub: "c", email: "c@example.com")
+        // A is still waiting for its first sync. B is the only known unread inbox.
+        try await env.accountStorage.saveSnapshot(AccountSnapshot(accountId: b.id, unreadCount: 103))
+        try await env.accountStorage.saveSnapshot(AccountSnapshot(accountId: c.id, unreadCount: 0))
+        state = await env.manager.getDisplayState()
+        XCTAssertEqual(state.primaryClickAction, .openInbox(b.id))
+
+        try await env.accountStorage.saveSnapshot(AccountSnapshot(accountId: c.id, unreadCount: 2))
+        state = await env.manager.getDisplayState()
+        guard case .chooseAccount(let rows) = state.primaryClickAction else {
+            return XCTFail("多个收件箱有未读时应显示账号选择菜单")
+        }
+        XCTAssertEqual(rows.map { $0.account.id }, [b.id, c.id])
+        XCTAssertEqual(rows.map { $0.unreadString }, ["103 封未读", "2 封未读"])
+
+        for account in [b, c] {
+            try await env.accountStorage.saveSnapshot(AccountSnapshot(accountId: account.id, unreadCount: 0))
+        }
+        state = await env.manager.getDisplayState()
+        XCTAssertEqual(state.primaryClickAction, .openInbox(a.id))
+    }
+
     // MARK: - 场景 04: 同轮检查 A 收到 3 封、B 收到 1 封，分别聚合通知
     func testScenario04_ConcurrentBatchArrival_IndependentNotifications() async throws {
         // Setup Account A (startHistoryId 100, unread 2)

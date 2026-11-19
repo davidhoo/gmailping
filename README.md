@@ -1,12 +1,12 @@
 # GmailPing
 
-GmailPing 是为 macOS 13 及更新版本设计的原生菜单栏工具。一个图标汇总多个 Gmail 收件箱的未读邮件数。点击图标打开默认邮箱，点击新邮件通知打开收到邮件的邮箱。
+GmailPing 是为 macOS 13 及更新版本设计的原生菜单栏工具。一个图标汇总多个 Gmail 收件箱的未读邮件数。点击图标时，只有一个邮箱有未读就直接打开该邮箱。多个邮箱有未读就列出各自的邮箱地址和未读数，点选即可打开。没有已知未读时打开默认邮箱。点击新邮件通知会打开收到邮件的邮箱。
 
 [项目首页](https://davidhoo.github.io/gmailping/) · [隐私政策](https://davidhoo.github.io/gmailping/privacy/) · [下载安装包](https://github.com/davidhoo/gmailping/releases)
 
 ## 首次添加 Gmail 账号
 
-打开 GmailPing 的 DMG，将 GmailPing 拖入「Applications（应用程序）」，然后从「应用程序」启动。打开 **偏好设置 → 账号 → 添加 Google 账号…**，在浏览器选择邮箱并授权。添加其他邮箱时重复此操作。每个邮箱的令牌独立保存在这台 Mac 的钥匙串中。
+下载发布页的 `.dmg.zip` 并解压，可在 Finder 中看到带 Gmail 图标的 DMG。也可以直接下载 `.dmg`。打开 DMG，将 GmailPing 拖入「Applications（应用程序）」，然后从「应用程序」启动。打开 **偏好设置 → 账号 → 添加 Google 账号…**，在浏览器选择邮箱并授权。添加其他邮箱时重复此操作。每个邮箱的令牌独立保存在这台 Mac 的钥匙串中。
 
 ## 维护者配置与打包
 

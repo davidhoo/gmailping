@@ -127,7 +127,7 @@ public final class GmailPingManager: @unchecked Sendable {
 
     public func openInbox(for accountId: UUID) async {
         let directory = (try? await accountStorage.loadDirectory()) ?? AccountDirectory()
-        if let acc = directory.accounts.first(where: { $0.id == accountId }) {
+        if let acc = directory.accounts.first(where: { $0.id == accountId && !$0.isPendingCleanup }) {
             _ = browserLauncher.openInbox(for: acc.email)
         }
     }

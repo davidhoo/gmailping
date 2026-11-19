@@ -56,6 +56,8 @@ rm -rf "${APP_BUNDLE}"
 mkdir -p "${APP_BUNDLE}/Contents/MacOS"
 mkdir -p "${APP_BUNDLE}/Contents/Resources"
 
+install -m 644 "${ROOT_DIR}/Resources/AppIcon.icns" "${APP_BUNDLE}/Contents/Resources/AppIcon.icns"
+
 if [[ -n "${OAUTH_RESOURCE}" ]]; then
     install -m 644 "${OAUTH_RESOURCE}" "${APP_BUNDLE}/Contents/Resources/GoogleDesktopClient.json"
 fi
@@ -70,6 +72,8 @@ cat << 'EOF' > "${APP_BUNDLE}/Contents/Info.plist"
 <dict>
     <key>CFBundleExecutable</key>
     <string>GmailPingApp</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon.icns</string>
     <key>CFBundleIdentifier</key>
     <string>com.gmailping.app</string>
     <key>CFBundleName</key>
@@ -79,9 +83,9 @@ cat << 'EOF' > "${APP_BUNDLE}/Contents/Info.plist"
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>1.0.2</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>3</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>LSUIElement</key>

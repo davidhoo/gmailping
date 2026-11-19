@@ -25,9 +25,9 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     public func update(with state: MenuBarDisplayState) {
-        self.currentState = state
         DispatchQueue.main.async { [weak self] in
             guard let self = self, let button = self.statusItem.button else { return }
+            self.currentState = state
             button.title = state.title
             button.toolTip = state.tooltip
             button.setAccessibilityLabel(state.accessibilityDescription)
@@ -40,20 +40,31 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         let isRightClick = event.type == .rightMouseUp || event.modifierFlags.contains(.control)
 
         if isRightClick {
-            let menu = buildMenu()
-            statusItem.menu = menu
-            sender.performClick(nil)
-            statusItem.menu = nil
-        } else {
-            // Left click
-            guard let state = currentState, state.hasAnyAccounts else {
-                onOpenPreferences?()
-                return
-            }
-            Task {
-                await manager.openDefaultInbox()
-            }
+            showMenu(buildMenu(), from: sender)
+            return
         }
+
+        switch currentState?.primaryClickAction ?? .openPreferences {
+        case .openPreferences:
+            onOpenPreferences?()
+        case .openInbox(let accountId):
+            Task { await manager.openInbox(for: accountId) }
+        case .chooseAccount(let accounts):
+            let menu = NSMenu()
+            for item in accounts {
+                let row = menu.addItem(withTitle: "\(item.displayTitle) · \(item.unreadString)",
+                                       action: #selector(openAccountInboxClicked(_:)), keyEquivalent: "")
+                row.target = self
+                row.representedObject = item.account.id
+            }
+            showMenu(menu, from: sender)
+        }
+    }
+
+    private func showMenu(_ menu: NSMenu, from button: NSStatusBarButton) {
+        statusItem.menu = menu
+        button.performClick(nil)
+        statusItem.menu = nil
     }
 
     private func buildMenu() -> NSMenu {

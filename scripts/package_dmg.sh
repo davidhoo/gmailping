@@ -6,11 +6,21 @@ DIST_DIR="${SCRIPT_DIR}/../dist"
 "${SCRIPT_DIR}/build_app.sh"
 
 WORK_DIR="$(mktemp -d "${DIST_DIR}/.dmg-XXXXXXXX")"
-trap 'rm -rf "${WORK_DIR}"' EXIT
+MOUNT_POINT="${WORK_DIR}/mounted"
+mounted=false
+cleanup() {
+    if [[ "${mounted}" == true ]]; then
+        hdiutil detach -quiet "${MOUNT_POINT}" || return 1
+    fi
+    rm -rf "${WORK_DIR}"
+}
+trap cleanup EXIT
 STAGE="${WORK_DIR}/volume"
 mkdir "${STAGE}"
 ditto "${DIST_DIR}/GmailPing.app" "${STAGE}/GmailPing.app"
 ln -s /Applications "${STAGE}/Applications"
+ICON_DIR="${STAGE}/GmailPing.app/Contents/Resources"
+cp "${ICON_DIR}/AppIcon.icns" "${STAGE}/.VolumeIcon.icns"
 
 # Ad-hoc signing seals the bundle for local installation. A publisher may supply a Developer ID identity.
 SIGN_IDENTITY="${GMAILPING_SIGN_IDENTITY:--}"
@@ -27,7 +37,24 @@ for arch in arm64 x86_64; do
     [[ " ${ARCHS} " == *" ${arch} "* ]] || { echo "Missing ${arch} architecture" >&2; exit 1; }
 done
 NAME="GmailPing-${VERSION}-universal.dmg"
-hdiutil create -quiet -srcfolder "${STAGE}" -volname GmailPing -fs HFS+ -format UDZO "${WORK_DIR}/${NAME}"
+hdiutil create -quiet -srcfolder "${STAGE}" -volname GmailPing -fs HFS+ -format UDRW "${WORK_DIR}/writable.dmg"
+mkdir "${MOUNT_POINT}"
+hdiutil attach -quiet -nobrowse -mountpoint "${MOUNT_POINT}" "${WORK_DIR}/writable.dmg"
+mounted=true
+SetFile -a C "${MOUNT_POINT}"
+hdiutil detach -quiet "${MOUNT_POINT}"
+mounted=false
+hdiutil convert -quiet "${WORK_DIR}/writable.dmg" -format UDZO -o "${WORK_DIR}/${NAME}"
 hdiutil verify -quiet "${WORK_DIR}/${NAME}"
+# Finder stores an unmounted file's custom icon in its resource fork.
+# Keep that metadata in a ZIP for downloads as well as on the local DMG.
+cat > "${WORK_DIR}/icon.r" <<'REZ'
+read 'icns' (-16455) "AppIcon.icns";
+REZ
+Rez -i "${ICON_DIR}" "${WORK_DIR}/icon.r" -append -o "${WORK_DIR}/${NAME}"
+SetFile -a C "${WORK_DIR}/${NAME}"
+ditto -c -k --rsrc --sequesterRsrc "${WORK_DIR}/${NAME}" "${WORK_DIR}/${NAME}.zip"
 mv -f "${WORK_DIR}/${NAME}" "${DIST_DIR}/${NAME}"
+mv -f "${WORK_DIR}/${NAME}.zip" "${DIST_DIR}/${NAME}.zip"
 echo "DMG: ${DIST_DIR}/${NAME}"
+echo "ZIP: ${DIST_DIR}/${NAME}.zip"

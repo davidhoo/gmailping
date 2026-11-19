@@ -56,6 +56,12 @@ public struct AccountStatusItem: Equatable, Sendable {
 }
 
 public struct MenuBarDisplayState: Equatable, Sendable {
+    public enum PrimaryClickAction: Equatable, Sendable {
+        case openPreferences
+        case openInbox(UUID)
+        case chooseAccount([AccountStatusItem])
+    }
+
     public let title: String
     public let tooltip: String
     public let accessibilityDescription: String
@@ -64,6 +70,17 @@ public struct MenuBarDisplayState: Equatable, Sendable {
     public let hasPendingAccounts: Bool
     public let hasOfflineOrReauthAccounts: Bool
     public let accountItems: [AccountStatusItem]
+
+    public var primaryClickAction: PrimaryClickAction {
+        let unreadAccounts = accountItems.filter { ($0.snapshot?.unreadCount ?? 0) > 0 }
+        if unreadAccounts.count > 1 {
+            return .chooseAccount(unreadAccounts)
+        }
+        guard let target = unreadAccounts.first ?? accountItems.first(where: { $0.isDefault }) ?? accountItems.first else {
+            return .openPreferences
+        }
+        return .openInbox(target.account.id)
+    }
 
     public init(
         title: String,
