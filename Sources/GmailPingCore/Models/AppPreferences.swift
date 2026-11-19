@@ -20,6 +20,7 @@ public enum CheckInterval: Int, Codable, CaseIterable, Sendable {
 
 public struct AppPreferences: Codable, Equatable, Sendable {
     public var launchAtLogin: Bool
+    public var hasInitializedLoginItem: Bool
     public var checkInterval: CheckInterval
     public var showUnreadCount: Bool
     public var hideCountWhenZero: Bool
@@ -30,6 +31,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
 
     public init(
         launchAtLogin: Bool = true,
+        hasInitializedLoginItem: Bool = false,
         checkInterval: CheckInterval = .seconds60,
         showUnreadCount: Bool = true,
         hideCountWhenZero: Bool = true,
@@ -39,6 +41,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
         defaultAccountId: UUID? = nil
     ) {
         self.launchAtLogin = launchAtLogin
+        self.hasInitializedLoginItem = hasInitializedLoginItem
         self.checkInterval = checkInterval
         self.showUnreadCount = showUnreadCount
         self.hideCountWhenZero = hideCountWhenZero

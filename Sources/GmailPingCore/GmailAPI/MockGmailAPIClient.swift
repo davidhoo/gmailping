@@ -5,6 +5,7 @@ public actor MockGmailAPIClient: GmailAPIClientProtocol {
     public var inboxLabelResult: Result<GmailLabel, Error>?
     public var historyResponses: [String: Result<GmailHistoryListResponse, Error>] = [:]
     public var messageResults: [String: Result<GmailMessage?, Error>] = [:]
+    public var historyDelayNanoseconds: UInt64 = 0
 
     public private(set) var getProfileCallCount = 0
     public private(set) var getInboxLabelCallCount = 0
@@ -12,6 +13,10 @@ public actor MockGmailAPIClient: GmailAPIClientProtocol {
     public private(set) var getMessageCallCount = 0
 
     public init() {}
+
+    public func setHistoryDelay(nanoseconds: UInt64) {
+        self.historyDelayNanoseconds = nanoseconds
+    }
 
     public func setProfileResult(_ result: Result<GmailProfile, Error>) {
         self.profileResult = result
@@ -58,6 +63,9 @@ public actor MockGmailAPIClient: GmailAPIClientProtocol {
         pageToken: String?
     ) async throws -> GmailHistoryListResponse {
         listHistoryCallCount += 1
+        if historyDelayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: historyDelayNanoseconds)
+        }
         let key = pageToken != nil ? "\(startHistoryId)_\(pageToken!)" : startHistoryId
         let res = historyResponses[key] ?? historyResponses[startHistoryId] ?? historyResponses["default"]
 

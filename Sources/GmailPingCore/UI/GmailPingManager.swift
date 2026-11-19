@@ -60,8 +60,15 @@ public final class GmailPingManager: @unchecked Sendable {
     }
 
     public func start(isSystemLoginStartup: Bool = false) async {
-        let prefs = preferencesStorage.loadPreferences()
-        try? loginItemManager.syncWithPreferences(launchAtLogin: prefs.launchAtLogin)
+        var prefs = preferencesStorage.loadPreferences()
+        if !prefs.hasInitializedLoginItem {
+            // "首次默认开启，登记之后以系统状态为准，尊重用户在系统设置里的修改"
+            if prefs.launchAtLogin {
+                try? loginItemManager.setEnabled(true)
+            }
+            prefs.hasInitializedLoginItem = true
+            preferencesStorage.savePreferences(prefs)
+        }
         try? await accountStorage.cleanupOrphans(keychain: keychainStorage, notificationService: notificationService)
         scheduler.start(isSystemLoginStartup: isSystemLoginStartup)
         await notifyStateChanged()
@@ -152,8 +159,16 @@ public final class GmailPingManager: @unchecked Sendable {
 
     public func updatePreferences(_ prefs: AppPreferences) async {
         preferencesStorage.savePreferences(prefs)
-        try? loginItemManager.setEnabled(prefs.launchAtLogin)
+        // Modifying general preferences (e.g. checkInterval) MUST NOT re-register or overwrite system login item!
         scheduler.rescheduleTimer()
+        await notifyStateChanged()
+    }
+
+    public func setLaunchAtLogin(_ enabled: Bool) async throws {
+        try loginItemManager.setEnabled(enabled)
+        var prefs = preferencesStorage.loadPreferences()
+        prefs.launchAtLogin = enabled
+        preferencesStorage.savePreferences(prefs)
         await notifyStateChanged()
     }
 }

@@ -114,6 +114,10 @@ public actor IncrementalSyncEngine {
             isRateLimited.removeValue(forKey: accountId)
             return .success(snapshot)
         } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled || Task.isCancelled {
+                // Sleep / quit / task cancellation: do NOT mark offline, do NOT set backoff
+                return .failure(error)
+            }
             await handleSyncError(accountId: accountId, error: error)
             return .failure(error)
         }
@@ -451,6 +455,9 @@ public actor IncrementalSyncEngine {
     // MARK: - Error Handling & Backoff
 
     private func handleSyncError(accountId: UUID, error: Error) async {
+        if error is CancellationError || (error as? URLError)?.code == .cancelled || Task.isCancelled {
+            return
+        }
         guard (try? await accountStorage.isAccountActive(accountId: accountId)) == true else {
             return
         }

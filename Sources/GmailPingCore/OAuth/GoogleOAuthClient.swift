@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 public enum OAuthError: Error, LocalizedError, Equatable {
     case invalidRedirectURI
@@ -97,6 +98,7 @@ public final class GoogleOAuthClient: GoogleOAuthClientProtocol, @unchecked Send
     public let clientId: String
     public let clientSecret: String?
     private let session: URLSession
+    public var publicKeyProvider: (@Sendable (String?) async throws -> SecKey?)?
 
     public static func resolveClientId() -> String {
         if let envId = ProcessInfo.processInfo.environment["GMAILPING_CLIENT_ID"], !envId.isEmpty {
@@ -220,7 +222,7 @@ public final class GoogleOAuthClient: GoogleOAuthClientProtocol, @unchecked Send
             throw OAuthError.insufficientScopes(missing: [requiredScope])
         }
 
-        let parsedIDToken = try parseAndValidateIDToken(idToken, expectedNonce: expectedNonce)
+        let parsedIDToken = try await parseAndValidateIDToken(idToken, expectedNonce: expectedNonce)
 
         return TokenExchangeResult(
             accessToken: accessToken,
@@ -291,7 +293,11 @@ public final class GoogleOAuthClient: GoogleOAuthClientProtocol, @unchecked Send
         return (accessToken, newRefreshToken, Date().addingTimeInterval(expiresIn))
     }
 
-    public func parseAndValidateIDToken(_ idToken: String, expectedNonce: String?) throws -> (sub: String, email: String?) {
+    public func parseAndValidateIDToken(
+        _ idToken: String,
+        expectedNonce: String?,
+        publicKey: SecKey? = nil
+    ) async throws -> (sub: String, email: String?) {
         let parts = idToken.components(separatedBy: ".")
         guard parts.count == 3 else {
             throw OAuthError.invalidIDToken(reason: "JWT 结构不合法，非三段式")
@@ -314,17 +320,49 @@ public final class GoogleOAuthClient: GoogleOAuthClientProtocol, @unchecked Send
             throw OAuthError.invalidIDToken(reason: "JWT Header 解析失败或缺少算法声明")
         }
 
-        // Reject 'none' algorithm
-        guard alg != "none" && !alg.isEmpty else {
-            throw OAuthError.invalidIDToken(reason: "拒绝不安全的 'none' 算法")
+        guard alg == "RS256" else {
+            if alg == "none" {
+                throw OAuthError.invalidIDToken(reason: "拒绝不安全的 'none' 算法")
+            }
+            throw OAuthError.invalidIDToken(reason: "仅支持 RS256 算法，不支持: \(alg)")
         }
+
+        let kid = headerJson["kid"] as? String
 
         // 2. Signature presence validation
         guard let signatureData = decodeBase64URL(parts[2]), !signatureData.isEmpty else {
             throw OAuthError.invalidIDToken(reason: "JWT 签名缺失或无效")
         }
 
-        // 3. Payload validation
+        // 3. Cryptographic RS256 signature verification
+        guard let signedData = "\(parts[0]).\(parts[1])".data(using: .utf8) else {
+            throw OAuthError.invalidIDToken(reason: "JWT 数据编码错误")
+        }
+
+        let targetKey: SecKey
+        if let key = publicKey {
+            targetKey = key
+        } else if let provider = self.publicKeyProvider, let key = try await provider(kid) {
+            targetKey = key
+        } else if let fetchedKey = try await fetchGooglePublicKey(kid: kid) {
+            targetKey = fetchedKey
+        } else {
+            throw OAuthError.invalidIDToken(reason: "未能获取有效的 Google RS256 公钥进行验签")
+        }
+
+        var verifyError: Unmanaged<CFError>?
+        let isValid = SecKeyVerifySignature(
+            targetKey,
+            .rsaSignatureMessagePKCS1v15SHA256,
+            signedData as CFData,
+            signatureData as CFData,
+            &verifyError
+        )
+        guard isValid else {
+            throw OAuthError.invalidIDToken(reason: "RS256 签名校验失败")
+        }
+
+        // 4. Payload validation
         guard let payloadData = decodeBase64URL(parts[1]),
               let json = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any] else {
             throw OAuthError.invalidIDToken(reason: "JWT Payload 解析失败")
@@ -372,5 +410,36 @@ public final class GoogleOAuthClient: GoogleOAuthClientProtocol, @unchecked Send
 
         let email = json["email"] as? String
         return (sub, email)
+    }
+
+    private func fetchGooglePublicKey(kid: String?) async throws -> SecKey? {
+        guard let url = URL(string: "https://www.googleapis.com/oauth2/v1/certs") else { return nil }
+        guard let (data, response) = try? await session.data(from: url),
+              let http = response as? HTTPURLResponse, http.statusCode == 200,
+              let certDict = (try? JSONSerialization.jsonObject(with: data)) as? [String: String] else {
+            return nil
+        }
+        let certString: String
+        if let kid = kid, let specificCert = certDict[kid] {
+            certString = specificCert
+        } else if let firstCert = certDict.values.first {
+            certString = firstCert
+        } else {
+            return nil
+        }
+
+        let cleaned = certString
+            .replacingOccurrences(of: "-----BEGIN CERTIFICATE-----", with: "")
+            .replacingOccurrences(of: "-----END CERTIFICATE-----", with: "")
+            .replacingOccurrences(of: "\n", with: "")
+            .replacingOccurrences(of: "\r", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard let certData = Data(base64Encoded: cleaned),
+              let cert = SecCertificateCreateWithData(nil, certData as CFData),
+              let key = SecCertificateCopyKey(cert) else {
+            return nil
+        }
+        return key
     }
 }

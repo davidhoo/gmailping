@@ -13,6 +13,7 @@ public final class PreferencesViewModel: ObservableObject {
 
     private let manager: GmailPingManager
     private let coordinator: OAuthFlowCoordinator
+    public var onExplainNotificationPurpose: (@Sendable () async -> Void)?
 
     public init(manager: GmailPingManager) {
         self.manager = manager
@@ -26,6 +27,15 @@ public final class PreferencesViewModel: ObservableObject {
             browserLauncher: manager.browserLauncher,
             syncEngine: manager.syncEngine
         )
+        self.onExplainNotificationPurpose = {
+            await MainActor.run {
+                let alert = NSAlert()
+                alert.messageText = "启用新邮件通知"
+                alert.informativeText = "GmailPing 将在收到新邮件时通过系统通知提醒您。您可以随时在偏好设置或系统设置中修改通知行为。"
+                alert.addButton(withTitle: "好")
+                alert.runModal()
+            }
+        }
         refresh()
     }
 
@@ -71,6 +81,11 @@ public final class PreferencesViewModel: ObservableObject {
         }
     }
 
+    public func setLaunchAtLogin(_ enabled: Bool) async throws {
+        try await manager.setLaunchAtLogin(enabled)
+        await MainActor.run { self.refresh() }
+    }
+
     public func cancelAddingAccount() {
         Task { await coordinator.cancel() }
         isAddingAccount = false
@@ -85,6 +100,7 @@ public final class PreferencesViewModel: ObservableObject {
                 _ = try await coordinator.addAccountFlow()
                 // "首个账号由用户连接后说明通知用途并调用系统授权。"
                 if wasEmpty {
+                    await onExplainNotificationPurpose?()
                     _ = await manager.notificationService.requestAuthorization()
                 }
                 await MainActor.run {
@@ -164,9 +180,9 @@ public struct PreferencesView: View {
                     Toggle("登录时自动启动 GmailPing", isOn: Binding(
                         get: { viewModel.loginItemStatus == .enabled },
                         set: { val in
-                            var p = viewModel.preferences
-                            p.launchAtLogin = val
-                            viewModel.updatePreferences(p)
+                            Task {
+                                try? await viewModel.setLaunchAtLogin(val)
+                            }
                         }
                     ))
 
