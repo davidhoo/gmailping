@@ -64,10 +64,17 @@ public final class GmailPingManager: @unchecked Sendable {
         if !prefs.hasInitializedLoginItem {
             // "首次默认开启，登记之后以系统状态为准，尊重用户在系统设置里的修改"
             if prefs.launchAtLogin {
-                try? loginItemManager.setEnabled(true)
+                do {
+                    try loginItemManager.setEnabled(true)
+                    prefs.hasInitializedLoginItem = true
+                    preferencesStorage.savePreferences(prefs)
+                } catch {
+                    // 登记失败时严禁写为已初始化，留给后续启动继续重试登记
+                }
+            } else {
+                prefs.hasInitializedLoginItem = true
+                preferencesStorage.savePreferences(prefs)
             }
-            prefs.hasInitializedLoginItem = true
-            preferencesStorage.savePreferences(prefs)
         }
         try? await accountStorage.cleanupOrphans(keychain: keychainStorage, notificationService: notificationService)
         scheduler.start(isSystemLoginStartup: isSystemLoginStartup)
@@ -168,6 +175,7 @@ public final class GmailPingManager: @unchecked Sendable {
         try loginItemManager.setEnabled(enabled)
         var prefs = preferencesStorage.loadPreferences()
         prefs.launchAtLogin = enabled
+        prefs.hasInitializedLoginItem = true
         preferencesStorage.savePreferences(prefs)
         await notifyStateChanged()
     }

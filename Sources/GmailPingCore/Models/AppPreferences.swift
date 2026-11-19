@@ -29,6 +29,18 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     public var notifyExistingUnreadOnSystemLogin: Bool
     public var defaultAccountId: UUID?
 
+    enum CodingKeys: String, CodingKey {
+        case launchAtLogin
+        case hasInitializedLoginItem
+        case checkInterval
+        case showUnreadCount
+        case hideCountWhenZero
+        case systemNotificationsEnabled
+        case notificationSoundEnabled
+        case notifyExistingUnreadOnSystemLogin
+        case defaultAccountId
+    }
+
     public init(
         launchAtLogin: Bool = true,
         hasInitializedLoginItem: Bool = false,
@@ -49,5 +61,33 @@ public struct AppPreferences: Codable, Equatable, Sendable {
         self.notificationSoundEnabled = notificationSoundEnabled
         self.notifyExistingUnreadOnSystemLogin = notifyExistingUnreadOnSystemLogin
         self.defaultAccountId = defaultAccountId
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.launchAtLogin = try container.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? true
+        // 关键向后兼容：当旧数据中缺少 hasInitializedLoginItem 字段时，判定为已安装升级老用户，
+        // 默认为 true，防止覆盖用户在系统设置里已关闭的登录项，且避免重置用户的其它偏好
+        self.hasInitializedLoginItem = try container.decodeIfPresent(Bool.self, forKey: .hasInitializedLoginItem) ?? true
+        self.checkInterval = try container.decodeIfPresent(CheckInterval.self, forKey: .checkInterval) ?? .seconds60
+        self.showUnreadCount = try container.decodeIfPresent(Bool.self, forKey: .showUnreadCount) ?? true
+        self.hideCountWhenZero = try container.decodeIfPresent(Bool.self, forKey: .hideCountWhenZero) ?? true
+        self.systemNotificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .systemNotificationsEnabled) ?? true
+        self.notificationSoundEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationSoundEnabled) ?? true
+        self.notifyExistingUnreadOnSystemLogin = try container.decodeIfPresent(Bool.self, forKey: .notifyExistingUnreadOnSystemLogin) ?? false
+        self.defaultAccountId = try container.decodeIfPresent(UUID.self, forKey: .defaultAccountId)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(launchAtLogin, forKey: .launchAtLogin)
+        try container.encode(hasInitializedLoginItem, forKey: .hasInitializedLoginItem)
+        try container.encode(checkInterval, forKey: .checkInterval)
+        try container.encode(showUnreadCount, forKey: .showUnreadCount)
+        try container.encode(hideCountWhenZero, forKey: .hideCountWhenZero)
+        try container.encode(systemNotificationsEnabled, forKey: .systemNotificationsEnabled)
+        try container.encode(notificationSoundEnabled, forKey: .notificationSoundEnabled)
+        try container.encode(notifyExistingUnreadOnSystemLogin, forKey: .notifyExistingUnreadOnSystemLogin)
+        try container.encodeIfPresent(defaultAccountId, forKey: .defaultAccountId)
     }
 }

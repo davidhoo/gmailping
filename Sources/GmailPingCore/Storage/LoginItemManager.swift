@@ -12,7 +12,6 @@ public protocol LoginItemManagerProtocol: Sendable {
     var status: LoginItemStatus { get }
     var isEnabled: Bool { get }
     func setEnabled(_ enabled: Bool) throws
-    func syncWithPreferences(launchAtLogin: Bool) throws
 }
 
 public final class LoginItemManager: LoginItemManagerProtocol, @unchecked Sendable {
@@ -64,19 +63,12 @@ public final class LoginItemManager: LoginItemManagerProtocol, @unchecked Sendab
             }
         }
     }
-
-    public func syncWithPreferences(launchAtLogin: Bool) throws {
-        if launchAtLogin && status == .notRegistered {
-            try setEnabled(true)
-        } else if !launchAtLogin && status == .enabled {
-            try setEnabled(false)
-        }
-    }
 }
 
 public final class MockLoginItemManager: LoginItemManagerProtocol, @unchecked Sendable {
     private let lock = NSLock()
     private var mockStatus: LoginItemStatus
+    public var shouldThrowOnSetEnabled: Bool = false
 
     public init(initialStatus: LoginItemStatus = .notRegistered) {
         self.mockStatus = initialStatus
@@ -101,16 +93,9 @@ public final class MockLoginItemManager: LoginItemManagerProtocol, @unchecked Se
     public func setEnabled(_ enabled: Bool) throws {
         lock.lock()
         defer { lock.unlock() }
-        mockStatus = enabled ? .enabled : .notRegistered
-    }
-
-    public func syncWithPreferences(launchAtLogin: Bool) throws {
-        lock.lock()
-        defer { lock.unlock() }
-        if launchAtLogin && mockStatus == .notRegistered {
-            mockStatus = .enabled
-        } else if !launchAtLogin && mockStatus == .enabled {
-            mockStatus = .notRegistered
+        if shouldThrowOnSetEnabled {
+            throw NSError(domain: "SMAppServiceError", code: 1, userInfo: [NSLocalizedDescriptionKey: "Simulated registration failure"])
         }
+        mockStatus = enabled ? .enabled : .notRegistered
     }
 }

@@ -74,6 +74,103 @@ final class AcceptanceTests_Scenarios18_19_AndCore: XCTestCase {
         env.manager.stop()
     }
 
+    // MARK: - 遗留偏好迁移测试：缺少 hasInitializedLoginItem 的旧数据保持已有设置，且启动与修改间隔均不得再次 register
+    func testLegacyPreferencesMigration_MissingInitializedField_PreservesSettingsAndPreventsRegister() async throws {
+        let suiteName = "test.gmailping.legacy.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Failed to create UserDefaults test suite")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let realStorage = UserDefaultsPreferencesStorage(userDefaults: defaults)
+
+        // 1. Construct raw JSON representing old preferences that LACKS hasInitializedLoginItem
+        let legacyJson: [String: Any] = [
+            "launchAtLogin": true,
+            "checkInterval": 300, // 5 minutes
+            "showUnreadCount": true,
+            "hideCountWhenZero": false,
+            "systemNotificationsEnabled": true,
+            "notificationSoundEnabled": false,
+            "notifyExistingUnreadOnSystemLogin": true
+        ]
+        let legacyData = try JSONSerialization.data(withJSONObject: legacyJson)
+        defaults.set(legacyData, forKey: "com.gmailping.preferences")
+
+        // 2. Decode via real UserDefaultsPreferencesStorage
+        let loaded = realStorage.loadPreferences()
+        XCTAssertEqual(loaded.checkInterval, .minutes5, "旧偏好中的检查间隔必须完整保留")
+        XCTAssertFalse(loaded.hideCountWhenZero, "旧偏好中的零未读隐藏设置必须完整保留")
+        XCTAssertFalse(loaded.notificationSoundEnabled, "旧偏好中的通知声音设置必须完整保留")
+        XCTAssertTrue(loaded.notifyExistingUnreadOnSystemLogin, "旧偏好中的系统登录通知设置必须完整保留")
+        XCTAssertTrue(loaded.hasInitializedLoginItem, "旧偏好缺少字段时必须默认置为 true，视为已初始化")
+
+        // 3. Assemble a manager using this real storage and a login item manager in .notRegistered state
+        let customLoginItemManager = MockLoginItemManager(initialStatus: .notRegistered)
+        let customManager = GmailPingManager(
+            accountStorage: env.accountStorage,
+            keychainStorage: env.keychainStorage,
+            preferencesStorage: realStorage,
+            oauthClient: env.oauthClient,
+            gmailClient: env.gmailClient,
+            notificationService: env.notificationService,
+            browserLauncher: env.browserLauncher,
+            loginItemManager: customLoginItemManager,
+            syncEngine: env.syncEngine
+        )
+
+        // 4. Start the manager: must NOT register login item
+        await customManager.start()
+        XCTAssertFalse(customLoginItemManager.isEnabled, "读出老用户偏好时，start() 绝不能重新 register 覆盖系统设置")
+        XCTAssertEqual(customLoginItemManager.status, .notRegistered)
+
+        // 5. Update preferences (e.g. interval): must NOT register login item
+        var modified = realStorage.loadPreferences()
+        modified.checkInterval = .minutes2
+        await customManager.updatePreferences(modified)
+        XCTAssertFalse(customLoginItemManager.isEnabled, "修改检查间隔等偏好绝不能触发 register")
+        XCTAssertEqual(customLoginItemManager.status, .notRegistered)
+        XCTAssertEqual(realStorage.loadPreferences().checkInterval, .minutes2)
+    }
+
+    // MARK: - 首次登记失败测试：登记抛错时不得将 hasInitializedLoginItem 标记为完成，后续启动重试成功
+    func testLoginItemRegistrationFailure_DoesNotMarkInitialized_AllowsSubsequentRetry() async throws {
+        // 1. Fresh preferences with hasInitializedLoginItem = false
+        var prefs = AppPreferences()
+        prefs.launchAtLogin = true
+        prefs.hasInitializedLoginItem = false
+        env.preferencesStorage.savePreferences(prefs)
+
+        // 2. Mock registration failure (e.g. SMAppService error)
+        env.loginItemManager.setStatus(.notRegistered)
+        env.loginItemManager.shouldThrowOnSetEnabled = true
+
+        // 3. First start fails to register
+        await env.manager.start()
+        XCTAssertFalse(env.loginItemManager.isEnabled)
+        XCTAssertEqual(env.loginItemManager.status, .notRegistered)
+
+        // 4. CRITICAL: hasInitializedLoginItem MUST remain false
+        let prefsAfterFail = env.preferencesStorage.loadPreferences()
+        XCTAssertFalse(prefsAfterFail.hasInitializedLoginItem, "登记失败时严禁将 hasInitializedLoginItem 标记为 true")
+
+        // 5. System issue resolved, registration succeeds on second launch
+        env.loginItemManager.shouldThrowOnSetEnabled = false
+        await env.manager.start()
+
+        XCTAssertTrue(env.loginItemManager.isEnabled, "系统故障恢复后，下次启动必须重试并成功登记")
+        XCTAssertEqual(env.loginItemManager.status, .enabled)
+
+        let prefsAfterSuccess = env.preferencesStorage.loadPreferences()
+        XCTAssertTrue(prefsAfterSuccess.hasInitializedLoginItem, "登记成功后必须将 hasInitializedLoginItem 标记为 true")
+
+        // 6. User disables in macOS system settings, restart must not re-register
+        env.loginItemManager.setStatus(.notRegistered)
+        await env.manager.start()
+        XCTAssertFalse(env.loginItemManager.isEnabled, "已初始化后，再次启动不得覆盖用户的系统设置")
+    }
+
     // MARK: - 场景 19: 菜单栏图标规范与渲染属性
     func testScenario19_MenuBarIconProperties() {
         let icon = MenuBarIcon.makeEnvelopeIcon()
