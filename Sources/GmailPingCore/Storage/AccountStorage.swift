@@ -49,24 +49,51 @@ public actor AccountStorage {
         _ = try fileManager.replaceItemAt(accountsFileURL, withItemAt: tempURL)
     }
 
+    public func isAccountActive(accountId: UUID) throws -> Bool {
+        let directory = try loadDirectory()
+        return directory.accounts.contains(where: { $0.id == accountId && !$0.isPendingCleanup })
+    }
+
     public func addOrUpdateAccount(
         googleSub: String,
-        email: String
+        email: String,
+        explicitId: UUID? = nil
     ) throws -> (Account, Bool) { // returns (account, isNew)
         var directory = try loadDirectory()
 
         if let index = directory.accounts.firstIndex(where: { $0.googleSub == googleSub }) {
-            // Existing sub: update email, order stays, mark not pending cleanup
-            var account = directory.accounts[index]
-            account.email = email
-            account.isPendingCleanup = false
-            directory.accounts[index] = account
-            try saveDirectory(directory)
-            return (account, false)
+            var existing = directory.accounts[index]
+            if existing.isPendingCleanup {
+                // If it was marked for cleanup, removing and re-adding MUST produce a new instance!
+                try deleteSnapshot(for: existing.id)
+                let newId = explicitId ?? UUID()
+                let nextOrder = (directory.accounts.map(\.order).max() ?? -1) + 1
+                let account = Account(
+                    id: newId,
+                    googleSub: googleSub,
+                    email: email,
+                    addedAt: Date(),
+                    order: nextOrder,
+                    isPendingCleanup: false
+                )
+                directory.accounts[index] = account
+                if directory.defaultAccountId == existing.id || directory.defaultAccountId == nil {
+                    directory.defaultAccountId = account.id
+                }
+                try saveDirectory(directory)
+                return (account, true)
+            } else {
+                // Active account update
+                existing.email = email
+                directory.accounts[index] = existing
+                try saveDirectory(directory)
+                return (existing, false)
+            }
         } else {
+            let newId = explicitId ?? UUID()
             let nextOrder = (directory.accounts.map(\.order).max() ?? -1) + 1
             let account = Account(
-                id: UUID(),
+                id: newId,
                 googleSub: googleSub,
                 email: email,
                 addedAt: Date(),
@@ -95,7 +122,6 @@ public actor AccountStorage {
         directory.accounts.removeAll { $0.id == accountId }
 
         if directory.defaultAccountId == accountId {
-            // Pick first remaining account by order
             let remaining = directory.accounts
                 .filter { !$0.isPendingCleanup }
                 .sorted(by: { $0.order < $1.order })
@@ -155,11 +181,31 @@ public actor AccountStorage {
 
     // MARK: - Orphan Cleanup
 
-    public func cleanupOrphans(keychain: KeychainStorageProtocol) throws {
-        let directory = try loadDirectory()
+    public func cleanupOrphans(
+        keychain: KeychainStorageProtocol,
+        notificationService: NotificationServiceProtocol? = nil
+    ) async throws {
+        var directory = try loadDirectory()
+
+        // 1. Finalize any incomplete cleanups (isPendingCleanup == true)
+        let pendingAccounts = directory.accounts.filter { $0.isPendingCleanup }
+        for acc in pendingAccounts {
+            try? keychain.deleteToken(for: acc.id)
+            try? deleteSnapshot(for: acc.id)
+            if let notificationService = notificationService {
+                await notificationService.clearNotifications(for: acc.id)
+            }
+        }
+        directory.accounts.removeAll { $0.isPendingCleanup }
+        if let defaultId = directory.defaultAccountId,
+           !directory.accounts.contains(where: { $0.id == defaultId }) {
+            directory.defaultAccountId = directory.accounts.sorted(by: { $0.order < $1.order }).first?.id
+        }
+        try saveDirectory(directory)
+
         let validIds = Set(directory.accounts.map(\.id))
 
-        // Clean orphaned snapshots
+        // 2. Clean orphaned snapshots
         try prepareDirectories()
         let fileURLs = try fileManager.contentsOfDirectory(
             at: snapshotsDirectoryURL,
@@ -172,7 +218,7 @@ public actor AccountStorage {
             }
         }
 
-        // Clean orphaned Keychain entries
+        // 3. Clean orphaned Keychain entries
         if let storedIds = try? keychain.allStoredAccountIds() {
             for id in storedIds where !validIds.contains(id) {
                 try? keychain.deleteToken(for: id)

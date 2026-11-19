@@ -12,6 +12,8 @@ public actor IncrementalSyncEngine {
     private var inFlightAccounts: Set<UUID> = []
     private var consecutiveFailures: [UUID: Int] = [:]
     private var nextRetryTimes: [UUID: Date] = [:]
+    private var isRateLimited: [UUID: Bool] = [:]
+    private var projectQuotaExhaustedUntil: Date?
 
     public init(
         accountStorage: AccountStorage,
@@ -37,19 +39,48 @@ public actor IncrementalSyncEngine {
         return nextRetryTimes[accountId]
     }
 
-    public func isReadyForSync(accountId: UUID) -> Bool {
+    public func isReadyForSync(accountId: UUID, isManualTrigger: Bool = false) async -> (ready: Bool, reason: String?) {
         if inFlightAccounts.contains(accountId) {
-            return false
+            return (false, "该账号正在同步中")
         }
+
+        if let projectUntil = projectQuotaExhaustedUntil, Date() < projectUntil {
+            let remain = Int(projectUntil.timeIntervalSinceNow)
+            return (false, "项目级配额已耗尽，需等待 \(remain) 秒")
+        }
+
+        let snap = try? await accountStorage.loadSnapshot(for: accountId)
+        if snap?.needsReauth == true {
+            return (false, "需要重新授权，已停止自动请求")
+        }
+
         if let retryTime = nextRetryTimes[accountId], Date() < retryTime {
-            return false
+            let isRateLimit = isRateLimited[accountId] == true
+            if isRateLimit {
+                // Server rate limit: both automatic and manual checks must wait!
+                let remain = max(1, Int(retryTime.timeIntervalSinceNow))
+                return (false, "处于服务端限流等待期，需等待 \(remain) 秒")
+            } else {
+                // Ordinary network backoff
+                if isManualTrigger {
+                    // Manual trigger can retry ordinary failures
+                    return (true, nil)
+                } else {
+                    let remain = max(1, Int(retryTime.timeIntervalSinceNow))
+                    return (false, "处于退避重试期，需等待 \(remain) 秒")
+                }
+            }
         }
-        return true
+
+        return (true, nil)
     }
 
-    public func clearBackoff(accountId: UUID) {
+    public func clearBackoff(accountId: UUID, forceServerRateLimit: Bool = false) {
         consecutiveFailures[accountId] = 0
-        nextRetryTimes.removeValue(forKey: accountId)
+        if forceServerRateLimit || isRateLimited[accountId] != true {
+            nextRetryTimes.removeValue(forKey: accountId)
+            isRateLimited.removeValue(forKey: accountId)
+        }
     }
 
     // MARK: - Main Sync Entry
@@ -57,11 +88,12 @@ public actor IncrementalSyncEngine {
     @discardableResult
     public func syncAccount(
         accountId: UUID,
-        isSystemLoginStartup: Bool = false
+        isSystemLoginStartup: Bool = false,
+        isManualTrigger: Bool = false
     ) async -> Result<AccountSnapshot, Error> {
-        // Guard against duplicate concurrent checks for the same account
-        guard !inFlightAccounts.contains(accountId) else {
-            return .failure(NSError(domain: "GmailPing", code: -1, userInfo: [NSLocalizedDescriptionKey: "该账号正在同步中"]))
+        let (ready, reason) = await isReadyForSync(accountId: accountId, isManualTrigger: isManualTrigger)
+        guard ready else {
+            return .failure(NSError(domain: "GmailPing", code: -1, userInfo: [NSLocalizedDescriptionKey: reason ?? "账号暂未就绪"]))
         }
 
         inFlightAccounts.insert(accountId)
@@ -71,6 +103,7 @@ public actor IncrementalSyncEngine {
             let snapshot = try await performSync(accountId: accountId, isSystemLoginStartup: isSystemLoginStartup)
             consecutiveFailures[accountId] = 0
             nextRetryTimes.removeValue(forKey: accountId)
+            isRateLimited.removeValue(forKey: accountId)
             return .success(snapshot)
         } catch {
             await handleSyncError(accountId: accountId, error: error)
@@ -82,11 +115,14 @@ public actor IncrementalSyncEngine {
         accountId: UUID,
         isSystemLoginStartup: Bool
     ) async throws -> AccountSnapshot {
-        // 1. Check account existence & pending cleanup
-        let directory = try await accountStorage.loadDirectory()
-        guard let account = directory.accounts.first(where: { $0.id == accountId }),
-              !account.isPendingCleanup else {
+        // 1. Check account active status
+        guard try await accountStorage.isAccountActive(accountId: accountId) else {
             throw NSError(domain: "GmailPing", code: -2, userInfo: [NSLocalizedDescriptionKey: "账号不存在或已被移除"])
+        }
+
+        let directory = try await accountStorage.loadDirectory()
+        guard let account = directory.accounts.first(where: { $0.id == accountId }) else {
+            throw NSError(domain: "GmailPing", code: -2, userInfo: [NSLocalizedDescriptionKey: "账号不存在"])
         }
 
         // 2. Retrieve & valid token
@@ -213,10 +249,8 @@ public actor IncrementalSyncEngine {
             inboxLabel = try await gmailClient.getInboxLabel(accessToken: currentToken)
         }
 
-        // 8. Re-check pending cleanup before atomic commit
-        let refreshedDir = try await accountStorage.loadDirectory()
-        guard let refreshedAcc = refreshedDir.accounts.first(where: { $0.id == accountId }),
-              !refreshedAcc.isPendingCleanup else {
+        // 8. Re-check active status before atomic commit
+        guard try await accountStorage.isAccountActive(accountId: accountId) else {
             throw NSError(domain: "GmailPing", code: -3, userInfo: [NSLocalizedDescriptionKey: "账号在同步过程中已被移除"])
         }
 
@@ -302,6 +336,11 @@ public actor IncrementalSyncEngine {
         // 2. users.labels.get(INBOX) to get messagesUnread
         let label = try await gmailClient.getInboxLabel(accessToken: token)
 
+        // Verify account is still active before saving
+        guard try await accountStorage.isAccountActive(accountId: account.id) else {
+            throw NSError(domain: "GmailPing", code: -3, userInfo: [NSLocalizedDescriptionKey: "账号已被移除"])
+        }
+
         // 3. Atomic save snapshot (silent baseline: no notifications)
         var snapshot = (try? await accountStorage.loadSnapshot(for: account.id)) ?? AccountSnapshot(accountId: account.id)
         snapshot.historyId = profile.historyId
@@ -329,7 +368,7 @@ public actor IncrementalSyncEngine {
             return snap
         }
 
-        // Mark delivering and save
+        // Mark delivering and save to disk first!
         snap.pendingBatches[idx].status = .delivering
         try await accountStorage.saveSnapshot(snap)
 
@@ -349,19 +388,24 @@ public actor IncrementalSyncEngine {
         email: String
     ) async throws -> AccountSnapshot {
         var snap = snapshot
-        let deliveredIds = await notificationService.getPendingAndDeliveredNotificationIds(for: snap.accountId)
+        _ = await notificationService.getPendingAndDeliveredNotificationIds(for: snap.accountId)
         let preferences = preferencesStorage.loadPreferences()
 
         for var batch in snap.pendingBatches {
             if batch.status == .pending {
+                // Pending batch: mark delivering, save first, then attempt delivery
                 batch.status = .delivering
+                snap.pendingBatches = [batch]
+                try? await accountStorage.saveSnapshot(snap)
+
                 if preferences.systemNotificationsEnabled {
                     _ = await notificationService.deliverBatch(batch, playSound: preferences.notificationSoundEnabled)
                 }
             } else if batch.status == .delivering {
-                if !deliveredIds.contains(batch.id) && preferences.systemNotificationsEnabled {
-                    _ = await notificationService.deliverBatch(batch, playSound: preferences.notificationSoundEnabled)
-                }
+                // If it was already marked delivering:
+                // Check if system delivered notifications contains it.
+                // If not found (result uncertain): end the batch to avoid double disruption!
+                // (寧可漏發，絕不重復打擾)
             }
         }
 
@@ -386,14 +430,23 @@ public actor IncrementalSyncEngine {
             )
             try keychainStorage.saveToken(newToken)
             return newToken
+        } catch let oauthErr as OAuthError {
+            if oauthErr == .invalidGrant {
+                throw OAuthError.invalidGrant
+            }
+            throw oauthErr
         } catch {
-            throw OAuthError.invalidGrant
+            throw error
         }
     }
 
     // MARK: - Error Handling & Backoff
 
     private func handleSyncError(accountId: UUID, error: Error) async {
+        guard (try? await accountStorage.isAccountActive(accountId: accountId)) == true else {
+            return
+        }
+
         let failures = (consecutiveFailures[accountId] ?? 0) + 1
         consecutiveFailures[accountId] = failures
 
@@ -402,18 +455,33 @@ public actor IncrementalSyncEngine {
         if let oauthErr = error as? OAuthError, oauthErr == .invalidGrant {
             snap.needsReauth = true
             snap.lastErrorReason = "授权失效，需要重新授权"
-            nextRetryTimes[accountId] = .distantFuture // stop polling
+            nextRetryTimes[accountId] = .distantFuture // stop automatic polling
+            isRateLimited[accountId] = false
         } else if let apiErr = error as? GmailAPIError, apiErr == .unauthorized {
             snap.needsReauth = true
             snap.lastErrorReason = "授权失效，需要重新授权"
             nextRetryTimes[accountId] = .distantFuture
-        } else if let apiErr = error as? GmailAPIError, case .rateLimited(let retryAfter) = apiErr {
-            snap.lastErrorReason = "触发限流"
+            isRateLimited[accountId] = false
+        } else if let apiErr = error as? GmailAPIError, case .policyBlocked(let reason) = apiErr {
+            snap.needsReauth = true
+            snap.lastErrorReason = reason
+            nextRetryTimes[accountId] = .distantFuture
+            isRateLimited[accountId] = false
+        } else if let apiErr = error as? GmailAPIError, case .rateLimited(let retryAfter, let isProjectLevel) = apiErr {
             let delay = retryAfter ?? 60.0
+            if isProjectLevel {
+                projectQuotaExhaustedUntil = Date().addingTimeInterval(delay)
+                snap.lastErrorReason = "项目级配额耗尽"
+            } else {
+                snap.lastErrorReason = "触发限流"
+            }
+            isRateLimited[accountId] = true
             nextRetryTimes[accountId] = Date().addingTimeInterval(delay)
         } else {
+            // Temporary network/server error
             snap.isOffline = true
             snap.lastErrorReason = error.localizedDescription
+            isRateLimited[accountId] = false
             // Exponential backoff with jitter: 30s to 15m
             let baseDelay = min(900.0, 30.0 * pow(2.0, Double(min(failures - 1, 5))))
             let jitter = Double.random(in: -0.1...0.1) * baseDelay

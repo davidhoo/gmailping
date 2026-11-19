@@ -97,13 +97,38 @@ public final class GmailAPIClient: GmailAPIClientProtocol, @unchecked Sendable {
             throw GmailAPIError.unauthorized
         }
 
-        if http.statusCode == 429 || http.statusCode == 403 {
-            var retrySeconds: TimeInterval?
+        if http.statusCode == 429 {
+            var retrySeconds: TimeInterval? = 60
             if let retryHeader = http.value(forHTTPHeaderField: "Retry-After"),
                let seconds = Double(retryHeader) {
                 retrySeconds = seconds
             }
-            throw GmailAPIError.rateLimited(retryAfter: retrySeconds)
+            throw GmailAPIError.rateLimited(retryAfter: retrySeconds, isProjectLevel: false)
+        }
+
+        if http.statusCode == 403 {
+            var retrySeconds: TimeInterval? = 60
+            if let retryHeader = http.value(forHTTPHeaderField: "Retry-After"),
+               let seconds = Double(retryHeader) {
+                retrySeconds = seconds
+            }
+
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let errorDict = json["error"] as? [String: Any] {
+                let errors = errorDict["errors"] as? [[String: Any]] ?? []
+                let reasons = errors.compactMap { $0["reason"] as? String }
+                let message = errorDict["message"] as? String ?? ""
+
+                if reasons.contains(where: { $0 == "quotaExceeded" || $0 == "dailyLimitExceeded" }) {
+                    throw GmailAPIError.rateLimited(retryAfter: retrySeconds ?? 300, isProjectLevel: true)
+                } else if reasons.contains(where: { $0 == "rateLimitExceeded" || $0 == "userRateLimitExceeded" }) {
+                    throw GmailAPIError.rateLimited(retryAfter: retrySeconds, isProjectLevel: false)
+                } else {
+                    throw GmailAPIError.policyBlocked(reason: message.isEmpty ? "权限不足或受管理员策略限制" : message)
+                }
+            } else {
+                throw GmailAPIError.policyBlocked(reason: "权限不足或受管理员策略限制 (403)")
+            }
         }
 
         if http.statusCode >= 500 {

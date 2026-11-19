@@ -1,7 +1,15 @@
 import Foundation
 import ServiceManagement
 
+public enum LoginItemStatus: String, Sendable {
+    case enabled = "已开启"
+    case requiresApproval = "待系统设置批准"
+    case notRegistered = "未开启"
+    case unsupported = "不支持"
+}
+
 public protocol LoginItemManagerProtocol: Sendable {
+    var status: LoginItemStatus { get }
     var isEnabled: Bool { get }
     func setEnabled(_ enabled: Bool) throws
 }
@@ -9,11 +17,24 @@ public protocol LoginItemManagerProtocol: Sendable {
 public final class LoginItemManager: LoginItemManagerProtocol, @unchecked Sendable {
     public init() {}
 
-    public var isEnabled: Bool {
+    public var status: LoginItemStatus {
         if #available(macOS 13.0, *) {
-            return SMAppService.mainApp.status == .enabled
+            switch SMAppService.mainApp.status {
+            case .enabled:
+                return .enabled
+            case .requiresApproval:
+                return .requiresApproval
+            case .notRegistered, .notFound:
+                return .notRegistered
+            @unknown default:
+                return .unsupported
+            }
         }
-        return false
+        return .unsupported
+    }
+
+    public var isEnabled: Bool {
+        return status == .enabled
     }
 
     public func setEnabled(_ enabled: Bool) throws {
@@ -34,21 +55,31 @@ public final class LoginItemManager: LoginItemManagerProtocol, @unchecked Sendab
 
 public final class MockLoginItemManager: LoginItemManagerProtocol, @unchecked Sendable {
     private let lock = NSLock()
-    private var state: Bool
+    private var mockStatus: LoginItemStatus
 
-    public init(initialState: Bool = false) {
-        self.state = initialState
+    public init(initialStatus: LoginItemStatus = .notRegistered) {
+        self.mockStatus = initialStatus
+    }
+
+    public var status: LoginItemStatus {
+        lock.lock()
+        defer { lock.unlock() }
+        return mockStatus
     }
 
     public var isEnabled: Bool {
+        return status == .enabled
+    }
+
+    public func setStatus(_ newStatus: LoginItemStatus) {
         lock.lock()
         defer { lock.unlock() }
-        return state
+        mockStatus = newStatus
     }
 
     public func setEnabled(_ enabled: Bool) throws {
         lock.lock()
         defer { lock.unlock() }
-        state = enabled
+        mockStatus = enabled ? .enabled : .notRegistered
     }
 }

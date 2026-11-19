@@ -30,6 +30,7 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
             guard let self = self, let button = self.statusItem.button else { return }
             button.title = state.title
             button.toolTip = state.tooltip
+            button.setAccessibilityLabel(state.accessibilityDescription)
         }
     }
 

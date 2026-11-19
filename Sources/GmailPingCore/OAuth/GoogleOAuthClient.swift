@@ -5,10 +5,11 @@ public enum OAuthError: Error, LocalizedError, Equatable {
     case stateMismatch
     case missingCode
     case missingIDToken
-    case invalidIDToken
+    case invalidIDToken(reason: String)
     case nonceMismatch
-    case subMismatch(expected: String, actual: String)
+    case subMismatch(expected: String, actual: String, expectedEmail: String?)
     case missingRefreshToken
+    case insufficientScopes(missing: [String])
     case serverError(statusCode: Int, message: String)
     case invalidGrant
     case networkError(String)
@@ -23,20 +24,25 @@ public enum OAuthError: Error, LocalizedError, Equatable {
             return "未能从 Google 回调中获取授权码"
         case .missingIDToken:
             return "授权响应缺少 ID Token"
-        case .invalidIDToken:
-            return "ID Token 格式或签名校验失败"
+        case .invalidIDToken(let reason):
+            return "ID Token 校验失败: \(reason)"
         case .nonceMismatch:
             return "ID Token nonce 不匹配"
-        case .subMismatch(let expected, let actual):
+        case .subMismatch(let expected, let actual, let email):
+            if let email = email {
+                return "Google 账号不匹配：当前需要授权的是账号 \(email)（sub: \(expected)），但浏览器选择的账号对应 sub 为 \(actual)。请重新选择原账号。"
+            }
             return "Google 账号不匹配：预期 sub 为 \(expected)，实际为 \(actual)。请选择原账号重新授权。"
         case .missingRefreshToken:
-            return "未获取到可持续刷新的 Refresh Token，请重新授权并勾选权限"
+            return "未获取到可持续刷新的 Refresh Token，无法作为可用账号连接，请重新授权并在同意屏幕勾选权限"
+        case .insufficientScopes(let missing):
+            return "未授予必要权限: \(missing.joined(separator: ", "))"
         case .serverError(let code, let msg):
             return "Google 授权服务器返回错误 (\(code)): \(msg)"
         case .invalidGrant:
             return "授权已失效或被撤销，需要重新授权"
         case .networkError(let msg):
-            return "网络错误: \(msg)"
+            return "网络异常: \(msg)"
         }
     }
 }
@@ -92,12 +98,26 @@ public final class GoogleOAuthClient: GoogleOAuthClientProtocol, @unchecked Send
     public let clientSecret: String?
     private let session: URLSession
 
+    public static func resolveClientId() -> String {
+        if let envId = ProcessInfo.processInfo.environment["GMAILPING_CLIENT_ID"], !envId.isEmpty {
+            return envId
+        }
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser
+        let configFile = homeDir.appendingPathComponent(".gmailping/config.json")
+        if let data = try? Data(contentsOf: configFile),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let id = json["client_id"] as? String, !id.isEmpty {
+            return id
+        }
+        return "GMAILPING_CLIENT_ID"
+    }
+
     public init(
-        clientId: String = "GMAILPING_CLIENT_ID",
+        clientId: String? = nil,
         clientSecret: String? = nil,
         session: URLSession = .shared
     ) {
-        self.clientId = clientId
+        self.clientId = clientId ?? Self.resolveClientId()
         self.clientSecret = clientSecret
         self.session = session
     }
@@ -161,7 +181,13 @@ public final class GoogleOAuthClient: GoogleOAuthClientProtocol, @unchecked Send
             .joined(separator: "&")
         request.httpBody = bodyString.data(using: .utf8)
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw OAuthError.networkError(error.localizedDescription)
+        }
+
         guard let httpResponse = response as? HTTPURLResponse else {
             throw OAuthError.networkError("无效响应")
         }
@@ -187,6 +213,12 @@ public final class GoogleOAuthClient: GoogleOAuthClientProtocol, @unchecked Send
         let refreshToken = json["refresh_token"] as? String
         let scopeString = json["scope"] as? String ?? ""
         let grantedScopes = scopeString.components(separatedBy: " ")
+
+        // Check required scope
+        let requiredScope = "https://www.googleapis.com/auth/gmail.metadata"
+        if !scopeString.isEmpty && !grantedScopes.contains(requiredScope) && !grantedScopes.contains("https://mail.google.com/") {
+            throw OAuthError.insufficientScopes(missing: [requiredScope])
+        }
 
         let parsedIDToken = try parseAndValidateIDToken(idToken, expectedNonce: expectedNonce)
 
@@ -225,7 +257,14 @@ public final class GoogleOAuthClient: GoogleOAuthClientProtocol, @unchecked Send
             .joined(separator: "&")
         request.httpBody = bodyString.data(using: .utf8)
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            // Network failure during refresh MUST NOT be treated as invalidGrant!
+            throw OAuthError.networkError(error.localizedDescription)
+        }
+
         guard let httpResponse = response as? HTTPURLResponse else {
             throw OAuthError.networkError("无效响应")
         }
@@ -245,7 +284,7 @@ public final class GoogleOAuthClient: GoogleOAuthClientProtocol, @unchecked Send
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let accessToken = json["access_token"] as? String,
               let expiresIn = json["expires_in"] as? TimeInterval else {
-            throw OAuthError.invalidIDToken
+            throw OAuthError.invalidIDToken(reason: "解析刷新令牌响应失败")
         }
 
         let newRefreshToken = json["refresh_token"] as? String
@@ -255,7 +294,7 @@ public final class GoogleOAuthClient: GoogleOAuthClientProtocol, @unchecked Send
     public func parseAndValidateIDToken(_ idToken: String, expectedNonce: String?) throws -> (sub: String, email: String?) {
         let parts = idToken.components(separatedBy: ".")
         guard parts.count == 3 else {
-            throw OAuthError.invalidIDToken
+            throw OAuthError.invalidIDToken(reason: "JWT 结构不合法，非三段式")
         }
 
         var base64 = parts[1]
@@ -268,11 +307,29 @@ public final class GoogleOAuthClient: GoogleOAuthClientProtocol, @unchecked Send
         guard let data = Data(base64Encoded: base64),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let sub = json["sub"] as? String else {
-            throw OAuthError.invalidIDToken
+            throw OAuthError.invalidIDToken(reason: "缺少必填的 sub 身份标识")
         }
 
-        if let expectedNonce = expectedNonce, let tokenNonce = json["nonce"] as? String {
-            guard tokenNonce == expectedNonce else {
+        // Issuer validation
+        if let iss = json["iss"] as? String {
+            let validIssuers = ["https://accounts.google.com", "accounts.google.com"]
+            guard validIssuers.contains(iss) else {
+                throw OAuthError.invalidIDToken(reason: "发行方无效: \(iss)")
+            }
+        } else {
+            throw OAuthError.invalidIDToken(reason: "缺少发行方 iss")
+        }
+
+        // Expiration validation
+        if let exp = json["exp"] as? TimeInterval {
+            guard exp > Date().timeIntervalSince1970 else {
+                throw OAuthError.invalidIDToken(reason: "ID Token 已过期")
+            }
+        }
+
+        // Nonce validation
+        if let expectedNonce = expectedNonce {
+            guard let tokenNonce = json["nonce"] as? String, tokenNonce == expectedNonce else {
                 throw OAuthError.nonceMismatch
             }
         }

@@ -27,18 +27,30 @@ public struct AccountStatusItem: Equatable, Sendable {
     }
 
     public var lastSyncString: String {
-        if let reason = snapshot?.lastErrorReason, snapshot?.needsReauth == true {
-            return "异常: \(reason)"
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+
+        let timeStr = snapshot?.lastSuccessTime.map { formatter.string(from: $0) }
+
+        if snapshot?.needsReauth == true {
+            if let time = timeStr {
+                return "待重新授权 (上次成功 \(time))"
+            }
+            return "待重新授权: \(snapshot?.lastErrorReason ?? "凭据失效")"
         }
-        if let time = snapshot?.lastSuccessTime {
-            let formatter = DateFormatter()
-            formatter.timeStyle = .short
-            formatter.dateStyle = .none
-            return "更新于 \(formatter.string(from: time))"
-        }
+
         if let reason = snapshot?.lastErrorReason {
+            if let time = timeStr {
+                return "异常: \(reason) (上次成功 \(time))"
+            }
             return "异常: \(reason)"
         }
+
+        if let time = timeStr {
+            return "更新于 \(time)"
+        }
+
         return "尚未同步"
     }
 }
@@ -46,6 +58,7 @@ public struct AccountStatusItem: Equatable, Sendable {
 public struct MenuBarDisplayState: Equatable, Sendable {
     public let title: String
     public let tooltip: String
+    public let accessibilityDescription: String
     public let totalUnread: Int?
     public let hasAnyAccounts: Bool
     public let hasPendingAccounts: Bool
@@ -55,6 +68,7 @@ public struct MenuBarDisplayState: Equatable, Sendable {
     public init(
         title: String,
         tooltip: String,
+        accessibilityDescription: String = "",
         totalUnread: Int?,
         hasAnyAccounts: Bool,
         hasPendingAccounts: Bool,
@@ -63,6 +77,7 @@ public struct MenuBarDisplayState: Equatable, Sendable {
     ) {
         self.title = title
         self.tooltip = tooltip
+        self.accessibilityDescription = accessibilityDescription.isEmpty ? tooltip : accessibilityDescription
         self.totalUnread = totalUnread
         self.hasAnyAccounts = hasAnyAccounts
         self.hasPendingAccounts = hasPendingAccounts
@@ -84,6 +99,7 @@ public struct MenuBarStateCalculator {
             return MenuBarDisplayState(
                 title: "",
                 tooltip: "GmailPing (未添加账号)",
+                accessibilityDescription: "GmailPing，未添加账号",
                 totalUnread: nil,
                 hasAnyAccounts: false,
                 hasPendingAccounts: false,
@@ -95,8 +111,9 @@ public struct MenuBarStateCalculator {
         var items: [AccountStatusItem] = []
         var total = 0
         var hasAtLeastOneSynced = false
-        var hasPending = false
-        var hasOfflineOrReauth = false
+        var hasEverSyncedAny = false
+        var staleAccounts: [String] = []
+        var pendingCount = 0
 
         for acc in activeAccounts {
             let snap = snapshots[acc.id]
@@ -107,22 +124,33 @@ public struct MenuBarStateCalculator {
                 total += unread
                 hasAtLeastOneSynced = true
             } else {
-                hasPending = true
+                pendingCount += 1
+            }
+
+            if snap?.lastSuccessTime != nil {
+                hasEverSyncedAny = true
             }
 
             if snap?.isOffline == true || snap?.needsReauth == true {
-                hasOfflineOrReauth = true
+                staleAccounts.append(acc.email)
             }
         }
 
-        // Title format
+        let hasPending = pendingCount > 0
+        let hasOfflineOrReauth = !staleAccounts.isEmpty
+
+        // Determine title display
         let title: String
         if !preferences.showUnreadCount {
             title = ""
+        } else if !hasEverSyncedAny && !hasAtLeastOneSynced {
+            // First time sync, no account has ever completed sync yet
+            title = " 等待同步"
         } else if !hasAtLeastOneSynced {
-            // No account has synced yet
+            // All accounts unknown/stale without known counts -> pure icon
             title = ""
         } else if total == 0 && preferences.hideCountWhenZero {
+            // Synced and total is 0 with hideCountWhenZero enabled -> pure icon
             title = ""
         } else if total >= 100 {
             title = " 99+"
@@ -130,24 +158,36 @@ public struct MenuBarStateCalculator {
             title = " \(total)"
         }
 
-        // Tooltip
-        var tooltipParts: [String] = []
-        tooltipParts.append("GmailPing")
+        // Construct tooltip & accessibility descriptions
+        var tooltipParts: [String] = ["GmailPing"]
+        var accessParts: [String] = ["GmailPing"]
+
         if hasAtLeastOneSynced {
             tooltipParts.append("合计 \(total) 封未读")
-        } else {
+            accessParts.append("合计 \(total) 封未读邮件")
+        } else if !hasEverSyncedAny {
             tooltipParts.append("等待同步")
+            accessParts.append("所有账号正在等待首次同步")
+        } else {
+            tooltipParts.append("全部账号待更新")
+            accessParts.append("全部账号数据暂不可用，待更新")
         }
 
         if hasOfflineOrReauth {
-            tooltipParts.append("部分账号待更新")
-        } else if hasPending {
-            tooltipParts.append("有账号等待同步")
+            let accountList = staleAccounts.joined(separator: "、")
+            tooltipParts.append("部分账号待更新: \(accountList)")
+            accessParts.append("待更新账号：\(accountList)")
+        }
+
+        if hasPending && hasAtLeastOneSynced {
+            tooltipParts.append("有 \(pendingCount) 个账号尚无数据")
+            accessParts.append("有 \(pendingCount) 个账号正在等待首次同步")
         }
 
         return MenuBarDisplayState(
             title: title,
             tooltip: tooltipParts.joined(separator: " · "),
+            accessibilityDescription: accessParts.joined(separator: "，"),
             totalUnread: hasAtLeastOneSynced ? total : nil,
             hasAnyAccounts: true,
             hasPendingAccounts: hasPending,

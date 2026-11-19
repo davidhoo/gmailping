@@ -8,6 +8,7 @@ public final class PreferencesViewModel: ObservableObject {
     @Published public var defaultAccountId: UUID?
     @Published public var isAddingAccount: Bool = false
     @Published public var errorMessage: String?
+    @Published public var loginItemStatus: LoginItemStatus = .notRegistered
 
     private let manager: GmailPingManager
     private let coordinator: OAuthFlowCoordinator
@@ -15,6 +16,7 @@ public final class PreferencesViewModel: ObservableObject {
     public init(manager: GmailPingManager) {
         self.manager = manager
         self.preferences = manager.preferencesStorage.loadPreferences()
+        self.loginItemStatus = manager.loginItemManager.status
         self.coordinator = OAuthFlowCoordinator(
             oauthClient: manager.oauthClient,
             gmailClient: manager.gmailClient,
@@ -32,6 +34,7 @@ public final class PreferencesViewModel: ObservableObject {
             self.accounts = dir.accounts.filter { !$0.isPendingCleanup }
             self.defaultAccountId = dir.defaultAccountId
             self.preferences = manager.preferencesStorage.loadPreferences()
+            self.loginItemStatus = manager.loginItemManager.status
 
             var snaps: [UUID: AccountSnapshot] = [:]
             for acc in self.accounts {
@@ -65,10 +68,20 @@ public final class PreferencesViewModel: ObservableObject {
         }
     }
 
+    public func cancelAddingAccount() {
+        Task { await coordinator.cancel() }
+        isAddingAccount = false
+    }
+
     public func addAccount() {
         isAddingAccount = true
         errorMessage = nil
         Task {
+            // "首个账号由用户连接后说明通知用途并调用系统授权。"
+            if self.accounts.isEmpty {
+                _ = await manager.notificationService.requestAuthorization()
+            }
+
             do {
                 _ = try await coordinator.addAccountFlow()
                 await MainActor.run {
@@ -127,7 +140,7 @@ public struct PreferencesView: View {
                     Label("账号", systemImage: "person.2")
                 }
         }
-        .frame(width: 520, height: 420)
+        .frame(width: 540, height: 440)
         .padding()
         .alert("确认移除账号", isPresented: $showingRemoveAlert, presenting: accountToRemove) { acc in
             Button("取消", role: .cancel) {}
@@ -144,14 +157,36 @@ public struct PreferencesView: View {
     private var generalTab: some View {
         Form {
             Section("系统启动") {
-                Toggle("登录时自动启动 GmailPing", isOn: Binding(
-                    get: { viewModel.preferences.launchAtLogin },
-                    set: { val in
-                        var p = viewModel.preferences
-                        p.launchAtLogin = val
-                        viewModel.updatePreferences(p)
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("登录时自动启动 GmailPing", isOn: Binding(
+                        get: { viewModel.preferences.launchAtLogin },
+                        set: { val in
+                            var p = viewModel.preferences
+                            p.launchAtLogin = val
+                            viewModel.updatePreferences(p)
+                        }
+                    ))
+
+                    HStack(spacing: 4) {
+                        Text("系统登录项状态:")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text(viewModel.loginItemStatus.rawValue)
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundColor(viewModel.loginItemStatus == .enabled ? .primary : .orange)
+
+                        Spacer()
+
+                        Button("打开系统设置...") {
+                            if let url = URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension") {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
                     }
-                ))
+                }
             }
 
             Section("检查间隔") {
@@ -191,33 +226,46 @@ public struct PreferencesView: View {
             }
 
             Section("通知与声音") {
-                Toggle("收到新邮件时发送系统通知", isOn: Binding(
-                    get: { viewModel.preferences.systemNotificationsEnabled },
-                    set: { val in
-                        var p = viewModel.preferences
-                        p.systemNotificationsEnabled = val
-                        viewModel.updatePreferences(p)
-                    }
-                ))
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("收到新邮件时发送系统通知", isOn: Binding(
+                        get: { viewModel.preferences.systemNotificationsEnabled },
+                        set: { val in
+                            var p = viewModel.preferences
+                            p.systemNotificationsEnabled = val
+                            viewModel.updatePreferences(p)
+                        }
+                    ))
 
-                Toggle("播放通知提示音", isOn: Binding(
-                    get: { viewModel.preferences.notificationSoundEnabled },
-                    set: { val in
-                        var p = viewModel.preferences
-                        p.notificationSoundEnabled = val
-                        viewModel.updatePreferences(p)
-                    }
-                ))
-                .disabled(!viewModel.preferences.systemNotificationsEnabled)
+                    Toggle("播放通知提示音", isOn: Binding(
+                        get: { viewModel.preferences.notificationSoundEnabled },
+                        set: { val in
+                            var p = viewModel.preferences
+                            p.notificationSoundEnabled = val
+                            viewModel.updatePreferences(p)
+                        }
+                    ))
+                    .disabled(!viewModel.preferences.systemNotificationsEnabled)
 
-                Toggle("系统登录时提醒已有未读", isOn: Binding(
-                    get: { viewModel.preferences.notifyExistingUnreadOnSystemLogin },
-                    set: { val in
-                        var p = viewModel.preferences
-                        p.notifyExistingUnreadOnSystemLogin = val
-                        viewModel.updatePreferences(p)
+                    Toggle("系统登录时提醒已有未读", isOn: Binding(
+                        get: { viewModel.preferences.notifyExistingUnreadOnSystemLogin },
+                        set: { val in
+                            var p = viewModel.preferences
+                            p.notifyExistingUnreadOnSystemLogin = val
+                            viewModel.updatePreferences(p)
+                        }
+                    ))
+
+                    HStack {
+                        Spacer()
+                        Button("打开系统通知设置...") {
+                            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
                     }
-                ))
+                }
             }
         }
         .formStyle(.grouped)
@@ -285,6 +333,12 @@ public struct PreferencesView: View {
                     Text("正在等待浏览器授权...")
                         .font(.caption)
                         .foregroundColor(.secondary)
+
+                    Button("取消") {
+                        viewModel.cancelAddingAccount()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
 
                 Spacer()
@@ -334,14 +388,12 @@ public struct PreferencesView: View {
                             .foregroundColor(.secondary)
                     }
 
-                    if let time = snapshot?.lastSuccessTime {
-                        Text("·")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Text("更新于 \(time, style: .time)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
+                    Text("·")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(snapshot != nil ? AccountStatusItem(account: account, snapshot: snapshot, isDefault: isDefault).lastSyncString : "尚未同步")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
             }
 

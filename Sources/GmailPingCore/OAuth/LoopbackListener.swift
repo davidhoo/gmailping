@@ -1,7 +1,7 @@
 import Foundation
 import Network
 
-public enum LoopbackListenerError: Error, LocalizedError {
+public enum LoopbackListenerError: Error, LocalizedError, Equatable {
     case serverCreationFailed
     case cancelled
     case timeout
@@ -20,12 +20,15 @@ public enum LoopbackListenerError: Error, LocalizedError {
 public final class LoopbackListener: @unchecked Sendable {
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "com.gmailping.loopback")
+    private var hasResumed = ManagedAtomicBool(false)
+    private var continuation: CheckedContinuation<[String: String], Error>?
+    private var timer: DispatchSourceTimer?
+    private var expectedState: String?
 
     public init() {}
 
     public func start() throws -> Int {
         let params = NWParameters.tcp
-        params.allowLocalEndpointReuse = false
         let listener = try NWListener(using: params, on: .any)
         self.listener = listener
 
@@ -48,6 +51,20 @@ public final class LoopbackListener: @unchecked Sendable {
             }
         }
 
+        // newConnectionHandler MUST be set before calling listener.start()
+        listener.newConnectionHandler = { [weak self] connection in
+            guard let self = self else { return }
+            // Restrict connection strictly to loopback interface (127.0.0.1 / ::1)
+            if case .hostPort(let host, _) = connection.endpoint {
+                let hostStr = "\(host)"
+                guard hostStr == "127.0.0.1" || hostStr == "::1" else {
+                    connection.cancel()
+                    return
+                }
+            }
+            self.handleIncomingConnection(connection)
+        }
+
         listener.start(queue: queue)
         _ = semaphore.wait(timeout: .now() + 5.0)
 
@@ -61,72 +78,111 @@ public final class LoopbackListener: @unchecked Sendable {
         return boundPort
     }
 
-    public func waitForCallback(timeoutSeconds: TimeInterval = 120) async throws -> [String: String] {
-        guard let listener = self.listener else {
+    public func waitForCallback(expectedState: String, timeoutSeconds: TimeInterval = 120) async throws -> [String: String] {
+        guard self.listener != nil else {
             throw LoopbackListenerError.serverCreationFailed
         }
+        self.expectedState = expectedState
 
-        return try await withCheckedThrowingContinuation { continuation in
-            let hasResumed = ManagedAtomicBool(false)
+        return try await withCheckedThrowingContinuation { cont in
+            self.continuation = cont
 
             let timer = DispatchSource.makeTimerSource(queue: queue)
             timer.schedule(deadline: .now() + timeoutSeconds)
             timer.setEventHandler { [weak self] in
-                if hasResumed.compareAndSwap(expected: false, desired: true) {
-                    self?.stop()
-                    continuation.resume(throwing: LoopbackListenerError.timeout)
+                guard let self = self else { return }
+                if self.hasResumed.compareAndSwap(expected: false, desired: true) {
+                    self.stop()
+                    cont.resume(throwing: LoopbackListenerError.timeout)
                 }
             }
             timer.resume()
+            self.timer = timer
+        }
+    }
 
-            listener.newConnectionHandler = { [weak self] connection in
-                connection.start(queue: self?.queue ?? .main)
-                connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, isComplete, error in
-                    guard let data = data, let requestString = String(data: data, encoding: .utf8) else {
-                        return
-                    }
+    private func handleIncomingConnection(_ connection: NWConnection) {
+        connection.start(queue: queue)
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self] data, _, _, _ in
+            guard let self = self, let data = data, let requestString = String(data: data, encoding: .utf8) else {
+                connection.cancel()
+                return
+            }
 
-                    // Parse request line: e.g. GET /callback?code=...&state=... HTTP/1.1
-                    let lines = requestString.components(separatedBy: "\r\n")
-                    guard let requestLine = lines.first else { return }
-                    let parts = requestLine.components(separatedBy: " ")
-                    guard parts.count >= 2 else { return }
+            let lines = requestString.components(separatedBy: "\r\n")
+            guard let requestLine = lines.first else {
+                connection.cancel()
+                return
+            }
+            let parts = requestLine.components(separatedBy: " ")
+            guard parts.count >= 2 else {
+                connection.cancel()
+                return
+            }
 
-                    let urlString = "http://127.0.0.1" + parts[1]
-                    guard let components = URLComponents(string: urlString) else { return }
+            let pathAndQuery = parts[1]
+            guard let components = URLComponents(string: "http://127.0.0.1" + pathAndQuery) else {
+                connection.cancel()
+                return
+            }
 
-                    var queryItems: [String: String] = [:]
-                    for item in components.queryItems ?? [] {
-                        queryItems[item.name] = item.value ?? ""
-                    }
+            // Ignore favicon or non-callback paths
+            if components.path == "/favicon.ico" {
+                let notFound = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                connection.send(content: notFound.data(using: .utf8), completion: .contentProcessed({ _ in
+                    connection.cancel()
+                }))
+                return
+            }
 
-                    // Send response
-                    let html = """
-                    <!DOCTYPE html>
-                    <html lang="zh-CN">
-                    <head><meta charset="utf-8"><title>GmailPing 授权</title>
-                    <style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:40px;text-align:center;background:#f5f5f7;color:#1d1d1f;}
-                    .card{background:white;padding:30px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,0.08);display:inline-block;max-width:400px;}
-                    h1{font-size:20px;margin-bottom:12px;}p{font-size:14px;color:#6e6e73;}</style></head>
-                    <body><div class="card"><h1>授权已完成</h1><p>请返回 GmailPing 应用，您可以关闭此网页标签。</p></div></body></html>
-                    """
-                    let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(html.utf8.count)\r\nConnection: close\r\n\r\n\(html)"
-                    if let respData = response.data(using: .utf8) {
-                        connection.send(content: respData, completion: .contentProcessed({ _ in
-                            connection.cancel()
-                        }))
-                    } else {
+            var queryItems: [String: String] = [:]
+            for item in components.queryItems ?? [] {
+                queryItems[item.name] = item.value ?? ""
+            }
+
+            // Only complete if state matches expectedState (if expectedState is set)
+            if let expected = self.expectedState {
+                guard let receivedState = queryItems["state"], receivedState == expected else {
+                    let bad = "HTTP/1.1 400 Bad Request\r\nContent-Length: 13\r\nConnection: close\r\n\r\nState Mismatch"
+                    connection.send(content: bad.data(using: .utf8), completion: .contentProcessed({ _ in
                         connection.cancel()
-                    }
-
-                    timer.cancel()
-                    self?.stop()
-
-                    if hasResumed.compareAndSwap(expected: false, desired: true) {
-                        continuation.resume(returning: queryItems)
-                    }
+                    }))
+                    return
                 }
             }
+
+            let html = """
+            <!DOCTYPE html>
+            <html lang="zh-CN">
+            <head><meta charset="utf-8"><title>GmailPing 授权</title>
+            <style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:40px;text-align:center;background:#f5f5f7;color:#1d1d1f;}
+            .card{background:white;padding:30px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,0.08);display:inline-block;max-width:400px;}
+            h1{font-size:20px;margin-bottom:12px;}p{font-size:14px;color:#6e6e73;}</style></head>
+            <body><div class="card"><h1>授权已完成</h1><p>请返回 GmailPing 应用，您可以关闭此网页标签。</p></div></body></html>
+            """
+            let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(html.utf8.count)\r\nConnection: close\r\n\r\n\(html)"
+            if let respData = response.data(using: .utf8) {
+                connection.send(content: respData, completion: .contentProcessed({ _ in
+                    connection.cancel()
+                }))
+            } else {
+                connection.cancel()
+            }
+
+            self.timer?.cancel()
+            self.stop()
+
+            if self.hasResumed.compareAndSwap(expected: false, desired: true) {
+                self.continuation?.resume(returning: queryItems)
+            }
+        }
+    }
+
+    public func cancel() {
+        if hasResumed.compareAndSwap(expected: false, desired: true) {
+            timer?.cancel()
+            stop()
+            continuation?.resume(throwing: LoopbackListenerError.cancelled)
         }
     }
 

@@ -45,7 +45,8 @@ public struct TestEnvironment {
             gmailClient: gmailClient,
             notificationService: notificationService,
             browserLauncher: browserLauncher,
-            loginItemManager: loginItemManager
+            loginItemManager: loginItemManager,
+            syncEngine: syncEngine
         )
     }
 
@@ -68,7 +69,14 @@ public final class MockOAuthClient: GoogleOAuthClientProtocol, @unchecked Sendab
         redirectURI: String,
         loginHint: String?
     ) -> URL? {
-        return authorizationURL
+        var comp = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth")!
+        comp.queryItems = [
+            URLQueryItem(name: "client_id", value: "test_client"),
+            URLQueryItem(name: "redirect_uri", value: redirectURI),
+            URLQueryItem(name: "state", value: state),
+            URLQueryItem(name: "nonce", value: nonce)
+        ]
+        return comp.url
     }
 
     public func exchangeCode(

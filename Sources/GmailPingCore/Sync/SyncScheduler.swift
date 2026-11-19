@@ -14,6 +14,7 @@ public final class SyncScheduler: @unchecked Sendable {
     private var isNetworkAvailable: Bool = true
     private var isSystemSleeping: Bool = false
     private var pendingDebounceTask: Task<Void, Never>?
+    private var activeSyncTask: Task<Void, Never>?
 
     public var onSyncCompleted: (@Sendable () -> Void)?
 
@@ -40,7 +41,7 @@ public final class SyncScheduler: @unchecked Sendable {
         Task {
             let prefs = preferencesStorage.loadPreferences()
             if prefs.checkInterval != .manual {
-                await checkAll(isSystemLoginStartup: isSystemLoginStartup)
+                await checkAll(isSystemLoginStartup: isSystemLoginStartup, isManualTrigger: false)
             }
         }
     }
@@ -51,6 +52,8 @@ public final class SyncScheduler: @unchecked Sendable {
         timerTask = nil
         pendingDebounceTask?.cancel()
         pendingDebounceTask = nil
+        activeSyncTask?.cancel()
+        activeSyncTask = nil
         lock.unlock()
     }
 
@@ -74,7 +77,7 @@ public final class SyncScheduler: @unchecked Sendable {
 
                 let (sleeping, online) = self.getSystemState()
                 if !sleeping && online {
-                    await self.checkAll()
+                    await self.checkAll(isManualTrigger: false)
                 }
             }
         }
@@ -83,25 +86,53 @@ public final class SyncScheduler: @unchecked Sendable {
 
     // MARK: - Check Triggers
 
-    public func checkAll(isSystemLoginStartup: Bool = false) async {
+    public func checkAll(isSystemLoginStartup: Bool = false, isManualTrigger: Bool = false) async {
+        let (sleeping, online) = getSystemState()
+        guard !sleeping && online else { return }
+
         let directory = (try? await accountStorage.loadDirectory()) ?? AccountDirectory()
         let activeAccounts = directory.accounts.filter { !$0.isPendingCleanup }
 
-        // Max global concurrency = 2
+        // Filter accounts by readiness
+        var accountsToSync: [Account] = []
+        for account in activeAccounts {
+            let (ready, _) = await syncEngine.isReadyForSync(
+                accountId: account.id,
+                isManualTrigger: isManualTrigger
+            )
+            if ready {
+                accountsToSync.append(account)
+            }
+        }
+
+        guard !accountsToSync.isEmpty else {
+            onSyncCompleted?()
+            return
+        }
+
+        // Global concurrency = 2, staggered polling
         await withTaskGroup(of: Void.self) { group in
             var activeWorkers = 0
 
-            for account in activeAccounts {
+            for (index, account) in accountsToSync.enumerated() {
+                if Task.isCancelled { break }
+
                 if activeWorkers >= 2 {
                     _ = await group.next()
                     activeWorkers -= 1
+                }
+
+                // Stagger requests slightly (100ms) between starting different accounts
+                if index > 0 {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
                 }
 
                 activeWorkers += 1
                 group.addTask {
                     _ = await self.syncEngine.syncAccount(
                         accountId: account.id,
-                        isSystemLoginStartup: isSystemLoginStartup
+                        isSystemLoginStartup: isSystemLoginStartup,
+                        isManualTrigger: isManualTrigger
                     )
                 }
             }
@@ -111,8 +142,10 @@ public final class SyncScheduler: @unchecked Sendable {
     }
 
     public func checkSingleAccount(accountId: UUID) async {
-        await syncEngine.clearBackoff(accountId: accountId)
-        _ = await syncEngine.syncAccount(accountId: accountId)
+        let (ready, _) = await syncEngine.isReadyForSync(accountId: accountId, isManualTrigger: true)
+        if ready {
+            _ = await syncEngine.syncAccount(accountId: accountId, isManualTrigger: true)
+        }
         onSyncCompleted?()
     }
 
@@ -142,9 +175,13 @@ public final class SyncScheduler: @unchecked Sendable {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.lock.lock()
-            self?.isSystemSleeping = true
-            self?.lock.unlock()
+            guard let self = self else { return }
+            self.lock.lock()
+            self.isSystemSleeping = true
+            // Cancel active in-flight sync task on sleep
+            self.activeSyncTask?.cancel()
+            self.activeSyncTask = nil
+            self.lock.unlock()
         }
 
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -161,7 +198,7 @@ public final class SyncScheduler: @unchecked Sendable {
 
     private func handleSystemWakeOrNetworkRestored() {
         let prefs = preferencesStorage.loadPreferences()
-        // Manual mode ignores wake and network restore events!
+        // Manual mode strictly ignores wake and network restore events!
         guard prefs.checkInterval != .manual else { return }
 
         lock.lock()
@@ -170,7 +207,7 @@ public final class SyncScheduler: @unchecked Sendable {
             // Debounce for 1 second to merge wake and network events
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             guard !Task.isCancelled, let self = self else { return }
-            await self.checkAll()
+            await self.checkAll(isManualTrigger: false)
         }
         lock.unlock()
     }

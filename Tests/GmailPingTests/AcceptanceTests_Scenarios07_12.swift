@@ -258,6 +258,10 @@ final class AcceptanceTests_Scenarios07_12: XCTestCase {
         let state = await env.manager.getDisplayState()
         XCTAssertTrue(state.hasOfflineOrReauthAccounts)
         XCTAssertTrue(state.tooltip.contains("部分账号待更新"))
+
+        let itemA = state.accountItems.first(where: { $0.account.id == accountA.id })
+        XCTAssertTrue(itemA?.lastSyncString.contains("待重新授权") == true, "菜单项应显示待重新授权")
+        XCTAssertTrue(itemA?.lastSyncString.contains("上次成功") == true, "菜单项应同时保留旧数据成功时间")
     }
 
     // MARK: - 场景 11: 移除默认账号时迟到结果废弃，默认目标转移
@@ -300,9 +304,9 @@ final class AcceptanceTests_Scenarios07_12: XCTestCase {
     func testScenario12_BadgeFormattingAndToggles() async throws {
         let (accountA, _) = try await env.accountStorage.addOrUpdateAccount(googleSub: "sub_A", email: "a@example.com")
 
-        // 1. Initial unsynced state -> pure icon, tooltip 等待同步
+        // 1. Initial unsynced state -> " 等待同步", tooltip 等待同步
         let state = await env.manager.getDisplayState()
-        XCTAssertEqual(state.title, "")
+        XCTAssertEqual(state.title, " 等待同步")
         XCTAssertNil(state.totalUnread)
         XCTAssertTrue(state.tooltip.contains("等待同步"))
 

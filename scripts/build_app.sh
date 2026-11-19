@@ -6,14 +6,15 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 cd "${ROOT_DIR}"
 
-echo "==> Building GmailPing with SwiftPM (release)..."
-swift build -c release --product GmailPingApp
+echo "==> Building GmailPing Universal Binary (arm64 + x86_64) in Release mode..."
+swift build -c release --arch arm64 --arch x86_64 --product GmailPingApp
 
 APP_BUNDLE="${ROOT_DIR}/dist/GmailPing.app"
-BIN_SOURCE="${ROOT_DIR}/.build/release/GmailPingApp"
+BIN_SOURCE="${ROOT_DIR}/.build/out/Products/Release/GmailPingApp"
+
 if [ ! -f "${BIN_SOURCE}" ]; then
-    # Try out directory if SPM used out
-    BIN_SOURCE="$(find .build -name "GmailPingApp" -type f -perm +111 | head -n 1)"
+    # Fallback search if path differs
+    BIN_SOURCE="$(find .build -name "GmailPingApp" -type f -perm +111 | grep -E "Release.*GmailPingApp" | head -n 1)"
 fi
 
 echo "==> Packaging into ${APP_BUNDLE}..."
@@ -54,5 +55,8 @@ cat << 'EOF' > "${APP_BUNDLE}/Contents/Info.plist"
 </dict>
 </plist>
 EOF
+
+echo "==> Verifying binary architectures with lipo..."
+lipo -info "${APP_BUNDLE}/Contents/MacOS/GmailPingApp"
 
 echo "==> App bundle built successfully at: ${APP_BUNDLE}"

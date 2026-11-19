@@ -23,7 +23,8 @@ public final class GmailPingManager: @unchecked Sendable {
         gmailClient: GmailAPIClientProtocol,
         notificationService: NotificationServiceProtocol,
         browserLauncher: BrowserLauncherProtocol,
-        loginItemManager: LoginItemManagerProtocol
+        loginItemManager: LoginItemManagerProtocol,
+        syncEngine: IncrementalSyncEngine? = nil
     ) {
         self.accountStorage = accountStorage
         self.keychainStorage = keychainStorage
@@ -34,7 +35,7 @@ public final class GmailPingManager: @unchecked Sendable {
         self.browserLauncher = browserLauncher
         self.loginItemManager = loginItemManager
 
-        let engine = IncrementalSyncEngine(
+        let engine = syncEngine ?? IncrementalSyncEngine(
             accountStorage: accountStorage,
             keychainStorage: keychainStorage,
             gmailClient: gmailClient,

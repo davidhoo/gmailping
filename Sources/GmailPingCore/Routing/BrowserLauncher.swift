@@ -35,14 +35,28 @@ public final class MockBrowserLauncher: BrowserLauncherProtocol, @unchecked Send
     private let lock = NSLock()
     public private(set) var openedURLs: [URL] = []
     public private(set) var openedEmails: [String] = []
+    public var autoCallback: Bool = false
 
     public init() {}
 
     @discardableResult
     public func openURL(_ url: URL) -> Bool {
         lock.lock()
-        defer { lock.unlock() }
         openedURLs.append(url)
+        let shouldAuto = autoCallback
+        lock.unlock()
+
+        if shouldAuto, let components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            let state = components.queryItems?.first(where: { $0.name == "state" })?.value ?? ""
+            let redirectURI = components.queryItems?.first(where: { $0.name == "redirect_uri" })?.value ?? ""
+            if let redirectURL = URL(string: "\(redirectURI)?code=test_code&state=\(state)") {
+                Task {
+                    try? await Task.sleep(nanoseconds: 30_000_000)
+                    _ = try? await URLSession.shared.data(from: redirectURL)
+                }
+            }
+        }
+
         return true
     }
 

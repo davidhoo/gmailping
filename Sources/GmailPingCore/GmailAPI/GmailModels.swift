@@ -94,7 +94,8 @@ public enum GmailAPIError: Error, LocalizedError, Equatable {
     case unauthorized
     case historyIdExpired(startHistoryId: String)
     case messageNotFound(id: String)
-    case rateLimited(retryAfter: TimeInterval?)
+    case rateLimited(retryAfter: TimeInterval?, isProjectLevel: Bool)
+    case policyBlocked(reason: String)
     case serverError(statusCode: Int)
     case networkError(String)
     case parsingError(String)
@@ -107,11 +108,14 @@ public enum GmailAPIError: Error, LocalizedError, Equatable {
             return "Gmail 历史游标已过期 (404, startHistoryId: \(id))"
         case .messageNotFound(let id):
             return "邮件未找到 (404, messageId: \(id))"
-        case .rateLimited(let retryAfter):
+        case .rateLimited(let retryAfter, let isProjectLevel):
+            let scope = isProjectLevel ? "项目级配额耗尽" : "用户请求限流"
             if let seconds = retryAfter {
-                return "触发 Google API 请求限流，需等待 \(Int(seconds)) 秒"
+                return "触发 Google API \(scope)，需等待 \(Int(seconds)) 秒"
             }
-            return "触发 Google API 请求限流"
+            return "触发 Google API \(scope)"
+        case .policyBlocked(let reason):
+            return "Google 权限被限制或策略阻止: \(reason)"
         case .serverError(let code):
             return "Google API 服务端错误 (\(code))"
         case .networkError(let msg):

@@ -2,13 +2,27 @@ import AppKit
 import SwiftUI
 import GmailPingCore
 
-public final class AppDelegate: NSObject, NSApplicationDelegate {
+public final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private var manager: GmailPingManager!
     private var menuBarController: MenuBarController!
     private var preferencesWindow: NSWindow?
 
+    public static func detectIsSystemLoginLaunch() -> Bool {
+        if CommandLine.arguments.contains("--login-item") {
+            return true
+        }
+        if let event = NSAppleEventManager.shared().currentAppleEvent,
+           let prop = event.attributeDescriptor(forKeyword: keyAEPropData) {
+            let fourCC = prop.typeCodeValue
+            if fourCC == 0x6c6f6769 /* 'logi' */ || fourCC == 0x6c6f676e /* 'logn' */ {
+                return true
+            }
+        }
+        return false
+    }
+
     public func applicationDidFinishLaunching(_ notification: Notification) {
-        // Set as accessory application (no Dock icon)
+        // Set as accessory application (no Dock icon, matches LSUIElement)
         NSApplication.shared.setActivationPolicy(.accessory)
 
         // Initialize Core Dependencies
@@ -21,9 +35,17 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         let browserLauncher = DefaultBrowserLauncher()
         let loginItemManager = LoginItemManager()
 
-        // Handle notification click: open inbox for that account
-        notificationService.setNotificationClickHandler { [weak browserLauncher] accountId, email in
-            browserLauncher?.openInbox(for: email)
+        // Handle notification click:
+        // "点击时重新解析实例。若账号已移除，打开账号管理。"
+        notificationService.setNotificationClickHandler { [weak self, weak browserLauncher, accountStorage] accountId, email in
+            Task { @MainActor [weak self, weak browserLauncher] in
+                let isActive = (try? await accountStorage.isAccountActive(accountId: accountId)) ?? false
+                if isActive {
+                    _ = browserLauncher?.openInbox(for: email)
+                } else {
+                    self?.openPreferencesWindow()
+                }
+            }
         }
 
         let mgr = GmailPingManager(
@@ -48,11 +70,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             controller?.update(with: state)
         }
 
-        let isLoginItem = CommandLine.arguments.contains("--login-item")
+        let isLoginItem = Self.detectIsSystemLoginLaunch()
 
         Task {
-            // Request notification permission on first launch
-            _ = await notificationService.requestAuthorization()
+            // Respect requirement: do not prompt for notification permissions on system startup or launch;
+            // only prompt when user connects their first account.
             await mgr.start(isSystemLoginStartup: isLoginItem)
         }
     }

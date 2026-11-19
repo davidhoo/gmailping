@@ -75,7 +75,8 @@ final class AcceptanceTests_Scenarios01_06: XCTestCase {
         _ = try await env.syncEngine.buildBaseline(account: accountB, accessToken: "token_B", isSystemLoginStartup: false)
 
         // Reauth A but user picks B's Google credentials (sub_B)
-        // Verify subMismatch error thrown and B's state unaffected
+        // Verify real reauthAccountFlow throws subMismatch and B's state unaffected
+        env.browserLauncher.autoCallback = true
         env.oauthClient.exchangeResult = .success(TokenExchangeResult(
             accessToken: "wrong_token",
             refreshToken: "wrong_refresh",
@@ -84,15 +85,22 @@ final class AcceptanceTests_Scenarios01_06: XCTestCase {
             emailFromIdToken: "b@example.com"
         ))
 
-        // We simulate the exchange check directly
+        let coordinator = OAuthFlowCoordinator(
+            oauthClient: env.oauthClient,
+            gmailClient: env.gmailClient,
+            keychainStorage: env.keychainStorage,
+            accountStorage: env.accountStorage,
+            browserLauncher: env.browserLauncher,
+            syncEngine: env.syncEngine
+        )
+
         do {
-            guard "sub_B" == accountA.googleSub else {
-                throw OAuthError.subMismatch(expected: accountA.googleSub, actual: "sub_B")
-            }
+            try await coordinator.reauthAccountFlow(account: accountA)
             XCTFail("Should have thrown subMismatch")
-        } catch let OAuthError.subMismatch(expected, actual) {
+        } catch let OAuthError.subMismatch(expected, actual, email) {
             XCTAssertEqual(expected, "sub_A")
             XCTAssertEqual(actual, "sub_B")
+            XCTAssertEqual(email, "a@example.com")
         }
 
         // B's snapshot and count are preserved
