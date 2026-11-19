@@ -1,5 +1,13 @@
 # Google OAuth 公开发布材料
 
+## 当前发布状态
+
+截至 2026-11-19 17:38（北京时间），公开仓库、GitHub Pages 首页和隐私政策均已上线。Google Cloud 项目 `gmailping` 的 Gmail API 已启用，受众为 External，发布状态为「正式版」。同意页配置的品牌名为 GmailPing，授权网域为 `davidhoo.github.io`，数据范围为 `openid` 和 `gmail.metadata`。
+
+Search Console 已通过 HTML 文件验证项目首页的 URL 前缀所有权。随后的 Google 品牌验证仍报首页未登记到发布者名下，控制台要求等待 24 小时让所有权信息同步，再从品牌页重新验证。保留站点验证文件。品牌验证通过后还需点击发布品牌，之后提交数据访问审核。当前 DMG 是本机临时签名的预览包。
+
+[产品首页](https://davidhoo.github.io/gmailping/) · [隐私政策](https://davidhoo.github.io/gmailping/privacy/) · [品牌页](https://console.cloud.google.com/auth/branding?project=gmailping) · [验证中心](https://console.cloud.google.com/auth/verification?project=gmailping)
+
 ## 权限用途说明（供审核表单使用）
 
 **openid.** We use the stable Google account identifier to distinguish mailboxes on the same Mac and to ensure that reauthorization reconnects the intended account. The Gmail profile supplies the mailbox address shown in the app.
