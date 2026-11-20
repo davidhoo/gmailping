@@ -1,32 +1,26 @@
 # GmailPing
 
-GmailPing 是为 macOS 13 及更新版本设计的原生菜单栏工具。一个图标汇总多个 Gmail 收件箱的未读邮件数。点击图标时，只有一个邮箱有未读就直接打开该邮箱。多个邮箱有未读就列出各自的邮箱地址和未读数，点选即可打开。没有已知未读时打开默认邮箱。点击新邮件通知会打开收到邮件的邮箱。
+**English** · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md)
 
-[项目首页](https://davidhoo.github.io/gmailping/) · [隐私政策](https://davidhoo.github.io/gmailping/privacy/) · [下载安装包](https://github.com/davidhoo/gmailping/releases)
+See how many unread messages are in your Gmail inboxes from the macOS menu bar. When new mail arrives, click the notification to open the inbox that received it in your default browser.
 
-## 首次添加 Gmail 账号
+## Install and connect Gmail
 
-下载发布页的 `.dmg.zip` 并解压，可在 Finder 中看到带 Gmail 图标的 DMG。也可以直接下载 `.dmg`。打开 DMG，将 GmailPing 拖入「Applications（应用程序）」，然后从「应用程序」启动。打开 **偏好设置 → 账号 → 添加 Google 账号…**，在浏览器选择邮箱并授权。添加其他邮箱时重复此操作。每个邮箱的令牌独立保存在这台 Mac 的钥匙串中。
+1. On the [releases page](https://github.com/davidhoo/gmailping/releases), download the universal `.dmg` for Apple silicon or Intel Macs running macOS 13 or later. If you choose the `.dmg.zip`, unzip it first. Version 1.0.2 is an ad-hoc signed preview without Apple notarization.
+2. Open the disk image, drag **GmailPing** into **Applications**, and launch it from there. Look for the envelope in the menu bar.
+3. Click the envelope to open preferences. The app’s controls are in Simplified Chinese. Select **账号** (Accounts), then **添加 Google 账号...** (Add Google account). Choose your Gmail account in the browser and approve access. Repeat for each inbox you want to follow.
+4. To receive alerts, allow notifications when macOS asks. You can change the sound and check interval later in **偏好设置** (Preferences).
 
-## 维护者配置与打包
+## Open the right inbox
 
-1. 维护者为 GmailPing 选择一个 Google Cloud 项目，启用 [Gmail API](https://console.cloud.google.com/apis/library/gmail.googleapis.com)。
-2. 配置同意屏幕与 External 受众，声明 `openid` 和 `https://www.googleapis.com/auth/gmail.metadata`。测试阶段将试用者加入测试用户。公开分发时按受限权限要求完成适用审核。[受众设置](https://console.cloud.google.com/auth/audience) · [Gmail 权限说明](https://developers.google.com/workspace/gmail/api/auth/scopes)
-3. 创建 **Desktop app（桌面应用）** OAuth 客户端，将下载的客户端 JSON 保存在源码目录之外。每次发行使用同一客户端，以便已有用户继续刷新令牌。[Google Cloud 客户端](https://console.cloud.google.com/auth/clients)
-4. 在项目根目录执行以下命令。脚本校验桌面客户端格式，把客户端配置封装到应用，生成 `dist/GmailPing-<版本号>-universal.dmg`。默认采用本机临时签名。公开分发时通过 `GMAILPING_SIGN_IDENTITY` 指定 Developer ID Application 身份，并在打包后完成 Apple 公证。
+Click the envelope. If one account has unread mail, GmailPing opens it directly. If several do, choose from a list showing each address and its unread count. If none has a known unread message, the default inbox opens. Right-click the envelope to see when each account was last checked, check for mail now, or change the default account.
 
-```sh
-GMAILPING_OAUTH_CLIENT_FILE="/absolute/path/to/desktop-client.json" ./scripts/package_dmg.sh
-```
+GmailPing groups messages that arrive in the same inbox during one check into a single notification. Marking an old message as unread updates the count without triggering a new-mail alert.
 
-桌面客户端属于公开客户端，随包字段可以被读取。每位用户仍需通过 Google 同意页和 PKCE 流程取得自己的令牌。[Google 桌面 OAuth 说明](https://developers.google.com/identity/protocols/oauth2/native-app)
+## Privacy and support
 
-本地开发可运行 `./scripts/build_app.sh --development`，通过 `GMAILPING_CLIENT_ID` 和可选的 `GMAILPING_CLIENT_SECRET` 提供配置。已有的 `~/.gmailping/config.json` 继续可用。运行时按环境变量、本机已有配置、随包配置的顺序读取，以保留既有账号的客户端绑定。
+Your Mac connects directly to Google to check counts, message IDs and labels. Messages and attachments stay in Gmail. Each account’s tokens are stored in the macOS Keychain. To disconnect an account, remove it under **账号**. You can also revoke its access in your Google account. [Privacy policy (Chinese)](https://davidhoo.github.io/gmailping/privacy/) · [Google account connections](https://myaccount.google.com/connections)
 
-## V1 设计文档
+For help, include your macOS and GmailPing versions in your [support email](mailto:coolbor@gmail.com).
 
-| 文档 | 阅读目的 |
-| --- | --- |
-| [产品需求](docs/产品需求.md) | 确认图标、多账号、通知和偏好设置的用户体验 |
-| [技术方案](docs/技术方案.md) | 确认授权、账号隔离、状态持久化与增量同步的实现 |
-| [开发与验收](docs/开发与验收.md) | 按阶段实施，用两个测试邮箱验证关键场景 |
+[Developer guide](docs/development/README.md) · [MIT License](LICENSE)
