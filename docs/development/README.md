@@ -36,6 +36,8 @@ Use the same publisher OAuth client across releases so existing accounts can ref
 GMAILPING_OAUTH_CLIENT_FILE="/absolute/path/to/desktop-client.json" ./scripts/package_dmg.sh
 ```
 
+The packaging script signs the feed and DMG with the Sparkle Ed25519 key under `com.gmailping.app` in the release Mac’s login keychain. Increment `CFBundleVersion` for each update. Upload `dist/appcast.xml`, the DMG and its ZIP together to the versioned GitHub Release, then mark it Latest.
+
 The script uses ad-hoc signing by default. For Developer ID distribution, set `GMAILPING_SIGN_IDENTITY` to a Developer ID Application identity and complete Apple notarization separately. The bundled desktop client is readable. User grants use PKCE and a loopback callback, and user tokens live in Keychain. Public distribution using the restricted Gmail metadata scope requires Google’s applicable verification. [Desktop OAuth](https://developers.google.com/identity/protocols/oauth2/native-app) · [Gmail scopes](https://developers.google.com/workspace/gmail/api/auth/scopes)
 
 Original project notes (Simplified Chinese) cover the [product requirements](../产品需求.md), [technical design](../技术方案.md), [acceptance scenarios](../开发与验收.md) and [OAuth release review](../OAuth公开发布.md).

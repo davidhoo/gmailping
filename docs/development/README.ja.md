@@ -36,6 +36,8 @@ open dist/GmailPing.app
 GMAILPING_OAUTH_CLIENT_FILE="/absolute/path/to/desktop-client.json" ./scripts/package_dmg.sh
 ```
 
+公開用 Mac のログインキーチェーンにある `com.gmailping.app` の Sparkle Ed25519 鍵でフィードと DMG に署名します。更新ごとに `CFBundleVersion` を増やし、`dist/appcast.xml`、DMG、ZIP を対応する GitHub Release にアップロードして Latest に設定します。
+
 既定ではアドホック署名を使用します。Developer ID で配布する場合は、`GMAILPING_SIGN_IDENTITY` に Developer ID Application の署名 ID を設定し、Apple の公証を別途行います。同梱したクライアント設定は読み取り可能です。ユーザー認証には PKCE とループバックコールバックを使用し、トークンはキーチェーンに保存します。制限付きの Gmail メタデータスコープを使って一般公開する際は、該当する Google の審査を受けてください。[デスクトップ OAuth](https://developers.google.com/identity/protocols/oauth2/native-app) · [Gmail のスコープ](https://developers.google.com/workspace/gmail/api/auth/scopes)
 
 原資料（簡体字中国語）には[製品要件](../产品需求.md)、[技術設計](../技术方案.md)、[受け入れシナリオ](../开发与验收.md)、[OAuth 公開審査の記録](../OAuth公开发布.md)があります。

@@ -10,6 +10,7 @@ public actor IncrementalSyncEngine {
 
     // Per-account synchronization locks / in-flight tracking
     private var inFlightAccounts: Set<UUID> = []
+    private var capacityWaiters: [CheckedContinuation<Void, Never>] = []
     private var consecutiveFailures: [UUID: Int] = [:]
     private var nextRetryTimes: [UUID: Date] = [:]
     private var isRateLimited: [UUID: Bool] = [:]
@@ -35,6 +36,10 @@ public actor IncrementalSyncEngine {
         return inFlightAccounts.contains(accountId)
     }
 
+    private func hasCapacity(for accountId: UUID) -> Bool {
+        inFlightAccounts.count < 2 && !inFlightAccounts.contains(accountId)
+    }
+
     public func getNextRetryTime(accountId: UUID) -> Date? {
         return nextRetryTimes[accountId]
     }
@@ -44,6 +49,10 @@ public actor IncrementalSyncEngine {
             return (false, "该账号正在同步中")
         }
 
+        return await retryReadiness(accountId: accountId, isManualTrigger: isManualTrigger)
+    }
+
+    private func retryReadiness(accountId: UUID, isManualTrigger: Bool) async -> (ready: Bool, reason: String?) {
         if let projectUntil = projectQuotaExhaustedUntil, Date() < projectUntil {
             let remain = Int(projectUntil.timeIntervalSinceNow)
             return (false, "项目级配额已耗尽，需等待 \(remain) 秒")
@@ -97,15 +106,28 @@ public actor IncrementalSyncEngine {
     public func syncAccount(
         accountId: UUID,
         isSystemLoginStartup: Bool = false,
-        isManualTrigger: Bool = false
+        isManualTrigger: Bool = false,
+        waitForCapacity: Bool = true
     ) async -> Result<AccountSnapshot, Error> {
-        let (ready, reason) = await isReadyForSync(accountId: accountId, isManualTrigger: isManualTrigger)
+        // Reserve before awaiting storage so overlapping triggers cannot start the same account.
+        while waitForCapacity && inFlightAccounts.count >= 2 && !inFlightAccounts.contains(accountId) {
+            await withCheckedContinuation { capacityWaiters.append($0) }
+        }
+        guard !Task.isCancelled, hasCapacity(for: accountId) else {
+            return .failure(CancellationError())
+        }
+        inFlightAccounts.insert(accountId)
+        defer {
+            inFlightAccounts.remove(accountId)
+            let waiters = capacityWaiters
+            capacityWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+        }
+
+        let (ready, reason) = await retryReadiness(accountId: accountId, isManualTrigger: isManualTrigger)
         guard ready else {
             return .failure(NSError(domain: "GmailPing", code: -1, userInfo: [NSLocalizedDescriptionKey: reason ?? "账号暂未就绪"]))
         }
-
-        inFlightAccounts.insert(accountId)
-        defer { inFlightAccounts.remove(accountId) }
 
         do {
             let snapshot = try await performSync(accountId: accountId, isSystemLoginStartup: isSystemLoginStartup)

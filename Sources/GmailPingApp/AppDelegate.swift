@@ -1,8 +1,9 @@
 import AppKit
 import SwiftUI
+import Sparkle
 import GmailPingCore
 
-public final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
+public final class AppDelegate: NSObject, NSApplicationDelegate, SPUStandardUserDriverDelegate, @unchecked Sendable {
     private var manager: GmailPingManager!
     private var menuBarController: MenuBarController!
     private var preferencesWindow: NSWindow?
@@ -25,19 +26,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Send
         let browserLauncher = DefaultBrowserLauncher()
         let loginItemManager = LoginItemManager()
 
-        // Handle notification click:
-        // "点击时重新解析实例。若账号已移除，打开账号管理。"
-        notificationService.setNotificationClickHandler { [weak self, weak browserLauncher, accountStorage] accountId, email in
-            Task { @MainActor [weak self, weak browserLauncher] in
-                let isActive = (try? await accountStorage.isAccountActive(accountId: accountId)) ?? false
-                if isActive {
-                    _ = browserLauncher?.openInbox(for: email)
-                } else {
-                    self?.openPreferencesWindow()
-                }
-            }
-        }
-
         let mgr = GmailPingManager(
             accountStorage: accountStorage,
             keychainStorage: keychainStorage,
@@ -50,7 +38,20 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Send
         )
         self.manager = mgr
 
-        let controller = MenuBarController(manager: mgr)
+        notificationService.setNotificationClickHandler { [weak self, weak mgr] accountId, _ in
+            Task { @MainActor in
+                if (try? await accountStorage.isAccountActive(accountId: accountId)) == true {
+                    await mgr?.openInbox(for: accountId)
+                } else {
+                    self?.openPreferencesWindow()
+                }
+            }
+        }
+
+        // Plain SwiftPM executables and development bundles have no release feed.
+        let updater = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") == nil ? nil :
+            SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: self)
+        let controller = MenuBarController(manager: mgr, updater: updater)
         controller.onOpenPreferences = { [weak self] in
             self?.openPreferencesWindow()
         }
@@ -67,6 +68,18 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Send
             // only prompt when user connects their first account.
             await mgr.start(isSystemLoginStartup: isLoginItem)
         }
+    }
+
+    public var supportsGentleScheduledUpdateReminders: Bool { true }
+
+    public func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool,
+                                                          forUpdate update: SUAppcastItem,
+                                                          state: SPUUserUpdateState) {
+        menuBarController?.availableVersion = update.displayVersionString
+    }
+
+    public func standardUserDriverWillFinishUpdateSession() {
+        menuBarController?.availableVersion = nil
     }
 
     public func openPreferencesWindow() {

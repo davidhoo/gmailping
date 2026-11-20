@@ -36,6 +36,8 @@ Usa el mismo cliente OAuth de distribución en las sucesivas versiones para que 
 GMAILPING_OAUTH_CLIENT_FILE="/absolute/path/to/desktop-client.json" ./scripts/package_dmg.sh
 ```
 
+El script firma el índice y el DMG con la clave Ed25519 de Sparkle guardada en el llavero de la máquina de publicación bajo `com.gmailping.app`. Incrementa `CFBundleVersion` en cada actualización. Sube `dist/appcast.xml`, el DMG y su ZIP a la versión correspondiente en GitHub Releases y márcala como Latest.
+
 El script usa una firma ad hoc por defecto. Para distribuir con Developer ID, asigna a `GMAILPING_SIGN_IDENTITY` una identidad Developer ID Application y completa la notarización de Apple por separado. La configuración del cliente incluida en la app es legible. La autorización usa PKCE y una redirección a la interfaz de bucle local. Los tokens se guardan en el llavero. La distribución pública con el permiso restringido de metadatos de Gmail requiere la verificación de Google que corresponda. [OAuth para aplicaciones de escritorio](https://developers.google.com/identity/protocols/oauth2/native-app) · [Permisos de Gmail](https://developers.google.com/workspace/gmail/api/auth/scopes)
 
 Los documentos originales (en chino simplificado) recogen los [requisitos del producto](../产品需求.md), el [diseño técnico](../技术方案.md), los [escenarios de aceptación](../开发与验收.md) y el [proceso de revisión de OAuth](../OAuth公开发布.md).

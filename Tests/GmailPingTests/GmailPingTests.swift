@@ -3,6 +3,6 @@ import XCTest
 
 final class GmailPingTests: XCTestCase {
     func testVersion() {
-        XCTAssertEqual(GmailPingVersion.current, "1.0.2")
+        XCTAssertEqual(GmailPingVersion.current, "1.1.0")
     }
 }

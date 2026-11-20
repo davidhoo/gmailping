@@ -24,9 +24,14 @@ cp "${ICON_DIR}/AppIcon.icns" "${STAGE}/.VolumeIcon.icns"
 
 # Ad-hoc signing seals the bundle for local installation. A publisher may supply a Developer ID identity.
 SIGN_IDENTITY="${GMAILPING_SIGN_IDENTITY:--}"
-SIGN_ARGS=(--force --options runtime --sign "${SIGN_IDENTITY}")
+SIGN_ARGS=(--force --sign "${SIGN_IDENTITY}")
 if [[ "${SIGN_IDENTITY}" != "-" ]]; then
-    SIGN_ARGS+=(--timestamp)
+    SIGN_ARGS+=(--timestamp --options runtime)
+    FRAMEWORK="${STAGE}/GmailPing.app/Contents/Frameworks/Sparkle.framework"
+    for helper in "${FRAMEWORK}"/XPCServices/*.xpc "${FRAMEWORK}/Autoupdate" "${FRAMEWORK}/Updater.app"; do
+        codesign "${SIGN_ARGS[@]}" --preserve-metadata=entitlements "${helper}"
+    done
+    codesign "${SIGN_ARGS[@]}" "${FRAMEWORK}"
 fi
 codesign "${SIGN_ARGS[@]}" "${STAGE}/GmailPing.app"
 codesign --verify --deep --strict "${STAGE}/GmailPing.app"
@@ -54,6 +59,15 @@ REZ
 Rez -i "${ICON_DIR}" "${WORK_DIR}/icon.r" -append -o "${WORK_DIR}/${NAME}"
 SetFile -a C "${WORK_DIR}/${NAME}"
 ditto -c -k --rsrc --sequesterRsrc "${WORK_DIR}/${NAME}" "${WORK_DIR}/${NAME}.zip"
+# Generate a signed feed pointing at immutable assets in this version's release.
+FEED_DIR="${WORK_DIR}/feed"
+mkdir "${FEED_DIR}"
+ln "${WORK_DIR}/${NAME}" "${FEED_DIR}/${NAME}"
+SPARKLE_TOOLS="${SCRIPT_DIR}/../.build/artifacts/sparkle/Sparkle/bin"
+"${SPARKLE_TOOLS}/generate_appcast" --account com.gmailping.app \
+    --download-url-prefix "https://github.com/davidhoo/gmailping/releases/download/v${VERSION}/" "${FEED_DIR}"
+"${SPARKLE_TOOLS}/sign_update" --verify --account com.gmailping.app "${FEED_DIR}/appcast.xml"
+mv -f "${FEED_DIR}/appcast.xml" "${DIST_DIR}/appcast.xml"
 mv -f "${WORK_DIR}/${NAME}" "${DIST_DIR}/${NAME}"
 mv -f "${WORK_DIR}/${NAME}.zip" "${DIST_DIR}/${NAME}.zip"
 echo "DMG: ${DIST_DIR}/${NAME}"

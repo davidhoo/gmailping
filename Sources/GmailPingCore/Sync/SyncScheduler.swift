@@ -16,6 +16,10 @@ public final class SyncScheduler: @unchecked Sendable {
     private var pendingDebounceTask: Task<Void, Never>?
     private var activeSyncTask: Task<Void, Never>?
 
+    private var readingTask: Task<Void, Never>?
+    private var readingAccount: UUID?
+    private var readingSession: UUID?
+
     public var onSyncCompleted: (@Sendable () -> Void)?
 
     public init(
@@ -48,6 +52,7 @@ public final class SyncScheduler: @unchecked Sendable {
 
     public func stop() {
         lock.lock()
+        cancelReadingLocked()
         timerTask?.cancel()
         timerTask = nil
         pendingDebounceTask?.cancel()
@@ -66,6 +71,7 @@ public final class SyncScheduler: @unchecked Sendable {
         let intervalSeconds = prefs.checkInterval.rawValue
 
         guard intervalSeconds > 0 else {
+            cancelReadingLocked()
             lock.unlock()
             return
         }
@@ -84,6 +90,66 @@ public final class SyncScheduler: @unchecked Sendable {
         lock.unlock()
     }
 
+    // Only the most recently opened inbox receives extra automatic checks.
+    func followOpenedInbox(_ accountId: UUID, firstDelay: Duration = .seconds(5),
+                           interval: Duration = .seconds(10), window: Duration = .seconds(60)) {
+        lock.lock()
+        defer { lock.unlock() }
+        cancelReadingLocked()
+        guard preferencesStorage.loadPreferences().checkInterval != .manual,
+              isNetworkAvailable, !isSystemSleeping else { return }
+
+        let session = UUID()
+        let clock = ContinuousClock()
+        let start = clock.now
+        readingAccount = accountId
+        readingSession = session
+        readingTask = Task { [weak self] in
+            defer { self?.finishReading(session) }
+            var next = start + firstDelay
+            let end = start + window
+            while next < end {
+                do { try await clock.sleep(until: next) } catch { return }
+                guard let self, !Task.isCancelled, clock.now < end else { return }
+                // Leave busy sync workers to the normal schedule and try the next tick.
+                let result = await self.syncEngine.syncAccount(accountId: accountId, waitForCapacity: false)
+                guard !Task.isCancelled else { return }
+                self.onSyncCompleted?()
+                if case .success(let snapshot) = result, snapshot.unreadCount == 0 { return }
+                next = clock.now + interval
+            }
+        }
+    }
+
+    func cancelReading(for accountId: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
+        if readingAccount == accountId { cancelReadingLocked() }
+    }
+
+    private func isFollowing(_ accountId: UUID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return readingAccount == accountId
+    }
+
+    private func finishReading(_ session: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
+        if readingSession == session {
+            readingSession = nil
+            readingAccount = nil
+            readingTask = nil
+        }
+    }
+
+    private func cancelReadingLocked() {
+        readingTask?.cancel()
+        readingTask = nil
+        readingAccount = nil
+        readingSession = nil
+    }
+
     // MARK: - Check Triggers
 
     public func checkAll(isSystemLoginStartup: Bool = false, isManualTrigger: Bool = false) async {
@@ -99,6 +165,7 @@ public final class SyncScheduler: @unchecked Sendable {
             var accountsToSync: [Account] = []
             for account in activeAccounts {
                 if Task.isCancelled { break }
+                if !isManualTrigger && self.isFollowing(account.id) { continue }
                 let (ready, _) = await self.syncEngine.isReadyForSync(
                     accountId: account.id,
                     isManualTrigger: isManualTrigger
@@ -191,6 +258,7 @@ public final class SyncScheduler: @unchecked Sendable {
             self.lock.lock()
             wasOnline = self.isNetworkAvailable
             self.isNetworkAvailable = isOnline
+            if !isOnline { self.cancelReadingLocked() }
             self.lock.unlock()
 
             if !wasOnline && isOnline {
@@ -209,6 +277,7 @@ public final class SyncScheduler: @unchecked Sendable {
             guard let self = self else { return }
             self.lock.lock()
             self.isSystemSleeping = true
+            self.cancelReadingLocked()
             // Cancel active in-flight sync task on sleep
             self.activeSyncTask?.cancel()
             self.activeSyncTask = nil

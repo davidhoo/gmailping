@@ -122,13 +122,19 @@ public final class GmailPingManager: @unchecked Sendable {
         }
 
         let defaultAcc = activeAccounts.first(where: { $0.id == directory.defaultAccountId }) ?? activeAccounts.first!
-        _ = browserLauncher.openInbox(for: defaultAcc.email)
+        openInbox(defaultAcc)
     }
 
     public func openInbox(for accountId: UUID) async {
         let directory = (try? await accountStorage.loadDirectory()) ?? AccountDirectory()
         if let acc = directory.accounts.first(where: { $0.id == accountId && !$0.isPendingCleanup }) {
-            _ = browserLauncher.openInbox(for: acc.email)
+            openInbox(acc)
+        }
+    }
+
+    private func openInbox(_ account: Account) {
+        if browserLauncher.openInbox(for: account.email) {
+            scheduler.followOpenedInbox(account.id)
         }
     }
 
@@ -142,6 +148,7 @@ public final class GmailPingManager: @unchecked Sendable {
 
     public func removeAccount(accountId: UUID) async throws {
         // 1. Mark pending cleanup so it stops scheduling/summary immediately
+        scheduler.cancelReading(for: accountId)
         try await accountStorage.markPendingCleanup(accountId: accountId)
         await notifyStateChanged()
 

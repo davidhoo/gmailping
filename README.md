@@ -6,16 +6,20 @@ See how many unread messages are in your Gmail inboxes from the macOS menu bar. 
 
 ## Install and connect Gmail
 
-1. On the [releases page](https://github.com/davidhoo/gmailping/releases), download the universal `.dmg` for Apple silicon or Intel Macs running macOS 13 or later. If you choose the `.dmg.zip`, unzip it first. Version 1.0.2 is an ad-hoc signed preview without Apple notarization.
+1. On the [releases page](https://github.com/davidhoo/gmailping/releases), download the universal `.dmg` for Apple silicon or Intel Macs running macOS 13 or later. If you choose the `.dmg.zip`, unzip it first. Version 1.1.0 is ad-hoc signed without Apple notarization.
 2. Open the disk image, drag **GmailPing** into **Applications**, and launch it from there. Look for the envelope in the menu bar.
 3. Click the envelope to open preferences. The app’s controls are in Simplified Chinese. Select **账号** (Accounts), then **添加 Google 账号...** (Add Google account). Choose your Gmail account in the browser and approve access. Repeat for each inbox you want to follow.
 4. To receive alerts, allow notifications when macOS asks. You can change the sound and check interval later in **偏好设置** (Preferences).
+
+Starting with 1.1.0, GmailPing checks GitHub Releases daily for updates and offers to install them. Right-click the envelope to check now (**检查应用更新…**) or turn automatic checks off (**自动检查应用更新**). Earlier versions need a one-time manual upgrade.
 
 ## Open the right inbox
 
 Click the envelope. If one account has unread mail, GmailPing opens it directly. If several do, choose from a list showing each address and its unread count. If none has a known unread message, the default inbox opens. Right-click the envelope to see when each account was last checked, check for mail now, or change the default account.
 
 GmailPing groups messages that arrive in the same inbox during one check into a single notification. Marking an old message as unread updates the count without triggering a new-mail alert.
+
+After you open an inbox, GmailPing checks that account after 5 seconds and then every 10 seconds for up to a minute. The regular schedule resumes when the unread count reaches zero. Manual mode skips these checks.
 
 ## Privacy and support
 

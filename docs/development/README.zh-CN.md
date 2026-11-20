@@ -36,6 +36,8 @@ open dist/GmailPing.app
 GMAILPING_OAUTH_CLIENT_FILE="/absolute/path/to/desktop-client.json" ./scripts/package_dmg.sh
 ```
 
+更新清单和 DMG 使用 Sparkle Ed25519 密钥签名。发布机的登录钥匙串中，密钥账号为 `com.gmailping.app`。每次发布递增 `CFBundleVersion`，将 `dist/appcast.xml`、DMG 和 ZIP 一起上传到对应版本的 GitHub Release，再设为 Latest。已安装的应用会从 Latest 获取清单，再从指定版本下载 DMG。
+
 脚本默认使用临时签名。使用 Developer ID 分发时，将 `GMAILPING_SIGN_IDENTITY` 设为 Developer ID Application 签名身份，并另行完成 Apple 公证。随应用分发的桌面客户端配置可以被读取。用户授权使用 PKCE 和本机回调，令牌保存在钥匙串中。公开分发时，须按 Gmail 元数据受限权限的要求完成相应 Google 验证。[桌面 OAuth](https://developers.google.com/identity/protocols/oauth2/native-app) · [Gmail 权限范围](https://developers.google.com/workspace/gmail/api/auth/scopes)
 
 项目原始文档包括[产品需求](../产品需求.md)、[技术方案](../技术方案.md)、[开发与验收](../开发与验收.md)和 [OAuth 公开发布记录](../OAuth公开发布.md)。

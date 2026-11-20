@@ -54,7 +54,9 @@ fi
 echo "==> Packaging into ${APP_BUNDLE}..."
 rm -rf "${APP_BUNDLE}"
 mkdir -p "${APP_BUNDLE}/Contents/MacOS"
-mkdir -p "${APP_BUNDLE}/Contents/Resources"
+mkdir -p "${APP_BUNDLE}/Contents/Resources" "${APP_BUNDLE}/Contents/Frameworks"
+ditto "$(dirname "${BIN_SOURCE}")/Sparkle.framework" "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework"
+install -m 644 .build/artifacts/sparkle/Sparkle/LICENSE "${APP_BUNDLE}/Contents/Resources/Sparkle-LICENSE"
 
 install -m 644 "${ROOT_DIR}/Resources/AppIcon.icns" "${APP_BUNDLE}/Contents/Resources/AppIcon.icns"
 
@@ -83,9 +85,9 @@ cat << 'EOF' > "${APP_BUNDLE}/Contents/Info.plist"
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.2</string>
+    <string>1.1.0</string>
     <key>CFBundleVersion</key>
-    <string>3</string>
+    <string>4</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>LSUIElement</key>
@@ -97,6 +99,16 @@ cat << 'EOF' > "${APP_BUNDLE}/Contents/Info.plist"
 </dict>
 </plist>
 EOF
+
+if [[ -n "${OAUTH_RESOURCE}" ]]; then
+    PLIST="${APP_BUNDLE}/Contents/Info.plist"
+    plutil -insert SUFeedURL -string "https://github.com/davidhoo/gmailping/releases/latest/download/appcast.xml" "${PLIST}"
+    plutil -insert SUPublicEDKey -string "3LXr9L7ZZRqtUaRucga7qUiFaDkvFgwhbFnih8UUwYo=" "${PLIST}"
+    plutil -insert SURequireSignedFeed -bool YES "${PLIST}"
+    plutil -insert SUVerifyUpdateBeforeExtraction -bool YES "${PLIST}"
+    plutil -insert SUEnableAutomaticChecks -bool YES "${PLIST}"
+    plutil -insert SUScheduledCheckInterval -integer 86400 "${PLIST}"
+fi
 
 echo "==> Verifying binary architectures with lipo..."
 lipo -info "${APP_BUNDLE}/Contents/MacOS/GmailPingApp"

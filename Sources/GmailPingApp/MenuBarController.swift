@@ -1,13 +1,19 @@
 import AppKit
+import Sparkle
 import GmailPingCore
 
 public final class MenuBarController: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
+    private let updater: SPUStandardUpdaterController?
     private let manager: GmailPingManager
     private var currentState: MenuBarDisplayState?
+    var availableVersion: String? {
+        didSet { updateTooltip() }
+    }
     public var onOpenPreferences: (() -> Void)?
 
-    public init(manager: GmailPingManager) {
+    public init(manager: GmailPingManager, updater: SPUStandardUpdaterController? = nil) {
+        self.updater = updater
         self.manager = manager
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
@@ -29,9 +35,14 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
             guard let self = self, let button = self.statusItem.button else { return }
             self.currentState = state
             button.title = state.title
-            button.toolTip = state.tooltip
+            self.updateTooltip()
             button.setAccessibilityLabel(state.accessibilityDescription)
         }
+    }
+
+    private func updateTooltip() {
+        statusItem.button?.toolTip = [currentState?.tooltip, availableVersion.map { "可更新至 GmailPing \($0)" }]
+            .compactMap { $0 }.joined(separator: "\n")
     }
 
     @objc private func statusBarButtonClicked(_ sender: NSStatusBarButton) {
@@ -82,9 +93,7 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
             menu.addItem(addItem)
             menu.addItem(NSMenuItem.separator())
 
-            let quitItem = NSMenuItem(title: "退出 GmailPing", action: #selector(quitClicked), keyEquivalent: "q")
-            quitItem.target = self
-            menu.addItem(quitItem)
+            addUpdateAndQuitItems(to: menu)
             return menu
         }
 
@@ -147,11 +156,23 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
+        addUpdateAndQuitItems(to: menu)
+        return menu
+    }
+
+    private func addUpdateAndQuitItems(to menu: NSMenu) {
+        if let updater {
+            let title = availableVersion.map { "更新至 GmailPing \($0)…" } ?? "检查应用更新…"
+            let check = menu.addItem(withTitle: title, action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
+            check.target = updater
+            check.isEnabled = updater.updater.canCheckForUpdates
+            let automatic = menu.addItem(withTitle: "自动检查应用更新", action: #selector(toggleAutomaticUpdates), keyEquivalent: "")
+            automatic.target = self
+            automatic.state = updater.updater.automaticallyChecksForUpdates ? .on : .off
+        }
         let quitItem = NSMenuItem(title: "退出 GmailPing", action: #selector(quitClicked), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
-
-        return menu
     }
 
     // MARK: - Menu Actions
@@ -191,6 +212,10 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
 
     @objc private func openPreferencesClicked() {
         onOpenPreferences?()
+    }
+
+    @objc private func toggleAutomaticUpdates() {
+        updater?.updater.automaticallyChecksForUpdates.toggle()
     }
 
     @objc private func quitClicked() {

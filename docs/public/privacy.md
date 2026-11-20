@@ -16,6 +16,8 @@ Google 登录返回的账号标识用于区分不同账号，Gmail 返回的邮�
 
 应用通过 HTTPS 直接与 Google 交换 OAuth 令牌并查询邮箱状态。令牌由 macOS 钥匙串保存。账号记录、同步位置、未读数量、最近检测时间和近期消息 ID 存储在本机。macOS 通知可以显示邮箱地址和邮件数量，显示方式由系统通知设置控制。打开 Gmail 时，应用把目标邮箱地址传递给默认浏览器，以便 Google 定位账号。
 
+应用通过 HTTPS 向 GitHub Releases 请求版本清单和安装包。更新请求不携带 Gmail 邮箱地址、授权令牌、邮件 ID 或未读数。可在菜单栏右键菜单关闭自动检查应用更新。
+
 开发者没有代收邮箱数据的服务器。应用不出售 Google 用户数据，不使用这些数据投放广告或训练模型，也不将其传给分析服务。应用对从 Google API 收到的信息的使用和转移遵守 Google API Services User Data Policy，包括 Limited Use 要求。[Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy)
 
 ## 保留、移除和撤销
